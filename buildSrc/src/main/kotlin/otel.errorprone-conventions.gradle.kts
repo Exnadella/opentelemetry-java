@@ -7,7 +7,10 @@ plugins {
   id("net.ltgt.nullaway")
 }
 
-val enableNullaway: String? by project
+dependencies {
+  errorprone("com.google.errorprone:error_prone_core")
+  errorprone("com.uber.nullaway:nullaway")
+}
 
 val disableErrorProne = properties["disableErrorProne"]?.toString()?.toBoolean() ?: false
 
@@ -22,6 +25,12 @@ tasks {
 
         disableWarningsInGeneratedCode.set(true)
         allDisabledChecksAsWarnings.set(true)
+
+        // Ignore warnings for generated and vendored classes
+        excludedPaths.set(".*/build/generated/.*|.*/internal/shaded/.*")
+
+        // Still Java 8
+        disable("Varifier")
 
         // Doesn't currently use Var annotations.
         disable("Var") // "-Xep:Var:OFF"
@@ -39,26 +48,43 @@ tasks {
         // deprecation warning.
         disable("UnnecessarilyFullyQualified")
 
-        // Ignore warnings for protobuf and jmh generated files.
-        excludedPaths.set(".*generated.*|.*internal.shaded.*")
-
+        // We use animal sniffer
         disable("Java7ApiChecker")
+        disable("Java8ApiChecker")
         disable("AndroidJdkLibsChecker")
-        //apparently disabling android doesn't disable this
+
+        // apparently disabling android doesn't disable this
         disable("StaticOrDefaultInterfaceMethod")
 
-        //until we have everything converted, we need these
-        disable("JdkObsolete")
-        disable("UnnecessaryAnonymousClass")
-
         // Limits APIs
-        disable("NoFunctionalReturnType")
+        disable("PreferredInterfaceType")
 
         // We don't depend on Guava so use normal splitting
         disable("StringSplitter")
 
         // Prevents lazy initialization
         disable("InitializeInline")
+
+        // Seems to trigger even when a deprecated method isn't called anywhere.
+        // We don't get much benefit from it anyways.
+        disable("InlineMeSuggester")
+
+        // We have nullaway so don't need errorprone nullable checks which have more false positives.
+        disable("FieldMissingNullable")
+        disable("ParameterMissingNullable")
+        disable("ReturnMissingNullable")
+        disable("VoidMissingNullable")
+
+        // Only used in comments, but couldn't SuppressWarnings for some reason
+        disable("UnicodeEscape")
+
+        // We make liberal use of builders returning "this" which can be safely ignored. Annotating
+        // every one of these methods is too noisy.
+        disable("CanIgnoreReturnValueSuggester")
+
+        // YodaConditions may improve safety in some cases. The argument of increased
+        // cognitive load is dubious.
+        disable("YodaCondition")
 
         if (name.contains("Jmh") || name.contains("Test")) {
           // Allow underscore in test-type method names
@@ -68,15 +94,21 @@ tasks {
         option("NullAway:CustomContractAnnotations", "io.opentelemetry.api.internal.Contract")
       }
 
-      errorprone.nullaway {
-        // Enable nullaway on main sources.
-        // TODO(anuraaga): Remove enableNullaway flag when all errors fixed
-        if (!name.contains("Test") && !name.contains("Jmh") && enableNullaway == "true") {
-          severity.set(CheckSeverity.ERROR)
-        } else {
+      with(options) {
+        errorprone.nullaway {
+          annotatedPackages.add("io.opentelemetry")
+          // Disable nullaway by default, we enable for main sources below.
           severity.set(CheckSeverity.OFF)
         }
-        annotatedPackages.add("io.opentelemetry")
+      }
+    }
+  }
+
+  // Enable nullaway on main sources.
+  named<JavaCompile>("compileJava") {
+    with(options) {
+      errorprone.nullaway {
+        severity.set(CheckSeverity.ERROR)
       }
     }
   }

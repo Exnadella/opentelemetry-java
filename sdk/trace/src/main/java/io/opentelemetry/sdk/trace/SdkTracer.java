@@ -8,40 +8,45 @@ package io.opentelemetry.sdk.trace;
 import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.api.trace.TracerProvider;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.trace.internal.TracerConfig;
 
 /** {@link SdkTracer} is SDK implementation of {@link Tracer}. */
 final class SdkTracer implements Tracer {
   static final String FALLBACK_SPAN_NAME = "<unspecified span name>";
+  private static final Tracer NOOP_TRACER = TracerProvider.noop().get("noop");
 
   private final TracerSharedState sharedState;
-  private final InstrumentationLibraryInfo instrumentationLibraryInfo;
+  private final InstrumentationScopeInfo instrumentationScopeInfo;
+  private final TracerConfig tracerConfig;
 
-  SdkTracer(TracerSharedState sharedState, InstrumentationLibraryInfo instrumentationLibraryInfo) {
+  SdkTracer(
+      TracerSharedState sharedState,
+      InstrumentationScopeInfo instrumentationScopeInfo,
+      TracerConfig tracerConfig) {
     this.sharedState = sharedState;
-    this.instrumentationLibraryInfo = instrumentationLibraryInfo;
+    this.instrumentationScopeInfo = instrumentationScopeInfo;
+    this.tracerConfig = tracerConfig;
   }
 
   @Override
   public SpanBuilder spanBuilder(String spanName) {
+    if (!tracerConfig.isEnabled()) {
+      return NOOP_TRACER.spanBuilder(spanName);
+    }
     if (spanName == null || spanName.trim().isEmpty()) {
       spanName = FALLBACK_SPAN_NAME;
     }
     if (sharedState.hasBeenShutdown()) {
-      return TracerProvider.noop()
-          .get(instrumentationLibraryInfo.getName(), instrumentationLibraryInfo.getVersion())
-          .spanBuilder(spanName);
+      Tracer tracer = TracerProvider.noop().get(instrumentationScopeInfo.getName());
+      return tracer.spanBuilder(spanName);
     }
     return new SdkSpanBuilder(
-        spanName, instrumentationLibraryInfo, sharedState, sharedState.getSpanLimits());
+        spanName, instrumentationScopeInfo, sharedState, sharedState.getSpanLimits());
   }
 
-  /**
-   * Returns the instrumentation library specified when creating the tracer.
-   *
-   * @return an instance of {@link InstrumentationLibraryInfo}
-   */
-  InstrumentationLibraryInfo getInstrumentationLibraryInfo() {
-    return instrumentationLibraryInfo;
+  // Visible for testing
+  InstrumentationScopeInfo getInstrumentationScopeInfo() {
+    return instrumentationScopeInfo;
   }
 }

@@ -10,11 +10,12 @@ import static org.assertj.core.api.InstanceOfAssertFactories.type;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import io.opentelemetry.sdk.autoconfigure.ConfigProperties;
-import io.opentelemetry.sdk.autoconfigure.spi.ConfigurableSamplerProvider;
+import io.opentelemetry.sdk.autoconfigure.spi.ConfigProperties;
+import io.opentelemetry.sdk.autoconfigure.spi.traces.ConfigurableSamplerProvider;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
 import java.util.HashMap;
 import java.util.ServiceLoader;
+import okhttp3.HttpUrl;
 import org.junit.jupiter.api.Test;
 
 public class JaegerRemoteSamplerProviderTest {
@@ -32,51 +33,53 @@ public class JaegerRemoteSamplerProviderTest {
     when(mockConfig.getString(JaegerRemoteSamplerProvider.SERVICE_NAME_PROPERTY))
         .thenReturn("test_service");
     HashMap<String, String> samplerArgs = new HashMap<>();
-    samplerArgs.put("endpoint", "localhost:9999");
+    samplerArgs.put("endpoint", "http://localhost:9999");
     samplerArgs.put("pollingInterval", "99");
     double samplingRate = 0.33;
     samplerArgs.put("initialSamplingRate", String.valueOf(samplingRate));
-    when(mockConfig.getCommaSeparatedMap(JaegerRemoteSamplerProvider.SAMPLER_ARG_PROPERTY))
+    when(mockConfig.getMap(JaegerRemoteSamplerProvider.SAMPLER_ARG_PROPERTY))
         .thenReturn(samplerArgs);
 
     Sampler sampler = Sampler.parentBased(Sampler.traceIdRatioBased(samplingRate));
     assertThat(samplerProviders)
         .singleElement(type(JaegerRemoteSamplerProvider.class))
         .satisfies(
-            provider ->
-                assertThat(provider.createSampler(mockConfig))
+            provider -> {
+              try (JaegerRemoteSampler s =
+                  (JaegerRemoteSampler) provider.createSampler(mockConfig)) {
+                assertThat(s)
                     .extracting("sampler", type(Sampler.class))
                     .asString()
-                    .isEqualTo(sampler.toString()))
-        .satisfies(
-            provider ->
-                assertThat(provider.createSampler(mockConfig))
-                    .extracting("serviceName")
-                    .isEqualTo("test_service"))
-        .satisfies(
-            provider ->
-                assertThat(provider.createSampler(mockConfig))
-                    .extracting("channel")
+                    .isEqualTo(sampler.toString());
+                assertThat(s).extracting("serviceName").isEqualTo("test_service");
+                assertThat(s)
                     .extracting("delegate")
-                    .extracting("target")
-                    .isEqualTo("localhost:9999"));
+                    .extracting("url")
+                    .isEqualTo(
+                        HttpUrl.get(
+                            "http://localhost:9999/jaeger.api_v2.SamplingManager/GetSamplingStrategy"));
+              }
+            });
   }
 
   @Test
   void serviceNameInAttributeProperties() {
     ConfigProperties mockConfig = mock(ConfigProperties.class);
     HashMap<String, String> attributeProperties = new HashMap<>();
-    attributeProperties.put(JaegerRemoteSamplerProvider.SERVICE_NAME_PROPERTY, "test_service2");
-    when(mockConfig.getCommaSeparatedMap(JaegerRemoteSamplerProvider.ATTRIBUTE_PROPERTY))
+    attributeProperties.put(
+        JaegerRemoteSamplerProvider.RESOURCE_ATTRIBUTE_SERVICE_NAME_PROPERTY, "test_service2");
+    when(mockConfig.getMap(JaegerRemoteSamplerProvider.ATTRIBUTE_PROPERTY))
         .thenReturn(attributeProperties);
     ServiceLoader<ConfigurableSamplerProvider> samplerProviders =
         ServiceLoader.load(ConfigurableSamplerProvider.class);
     assertThat(samplerProviders)
         .singleElement(type(JaegerRemoteSamplerProvider.class))
         .satisfies(
-            provider ->
-                assertThat(provider.createSampler(mockConfig))
-                    .extracting("serviceName")
-                    .isEqualTo("test_service2"));
+            provider -> {
+              try (JaegerRemoteSampler s =
+                  (JaegerRemoteSampler) provider.createSampler(mockConfig)) {
+                assertThat(s).extracting("serviceName").isEqualTo("test_service2");
+              }
+            });
   }
 }

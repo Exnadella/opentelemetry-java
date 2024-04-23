@@ -5,80 +5,119 @@
 
 package io.opentelemetry.sdk.internal;
 
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.internal.GuardedBy;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 import javax.annotation.Nullable;
 
 /**
- * Base class for all the provider classes (TracerProvider, MeterProvider, etc.).
+ * Component (tracer, meter, etc) registry class for all the provider classes (TracerProvider,
+ * MeterProvider, etc.).
+ *
+ * <p>Components are identified by name, version, and schema. Name is required, but version and
+ * schema are optional. Therefore, we have 4 possible scenarios for component keys:
+ *
+ * <ol>
+ *   <li>Only name is provided, represented by {@link #componentByName}
+ *   <li>Name and version are provided, represented by {@link #componentByNameAndVersion}
+ *   <li>Name and schema are provided, represented by {@link #componentByNameAndSchema}
+ *   <li>Name, version and schema are provided, represented by {@link
+ *       #componentByNameVersionAndSchema}
+ * </ol>
+ *
+ * <p>This class is internal and is hence not for public use. Its APIs are unstable and can change
+ * at any time.
  *
  * @param <V> the type of the registered value.
  */
 public final class ComponentRegistry<V> {
 
-  private final ConcurrentMap<InstrumentationLibraryInfo, V> registry = new ConcurrentHashMap<>();
-  private final Function<InstrumentationLibraryInfo, V> factory;
+  private final Map<String, V> componentByName = new ConcurrentHashMap<>();
+  private final Map<String, Map<String, V>> componentByNameAndVersion = new ConcurrentHashMap<>();
+  private final Map<String, Map<String, V>> componentByNameAndSchema = new ConcurrentHashMap<>();
+  private final Map<String, Map<String, Map<String, V>>> componentByNameVersionAndSchema =
+      new ConcurrentHashMap<>();
 
-  public ComponentRegistry(Function<InstrumentationLibraryInfo, V> factory) {
+  private final Object lock = new Object();
+
+  @GuardedBy("lock")
+  private final Set<V> allComponents = Collections.newSetFromMap(new IdentityHashMap<>());
+
+  private final Function<InstrumentationScopeInfo, V> factory;
+
+  public ComponentRegistry(Function<InstrumentationScopeInfo, V> factory) {
     this.factory = factory;
   }
 
   /**
-   * Returns the registered value associated with this name and {@code null} version if any,
-   * otherwise creates a new instance and associates it with the given name and {@code null} version
-   * and schemaUrl.
-   *
-   * @param instrumentationName the name of the instrumentation library.
-   * @return the registered value associated with this name and {@code null} version.
+   * Returns the component associated with the {@code name}, {@code version}, and {@code schemaUrl}.
+   * {@link Attributes} are not part of component identity. Behavior is undefined when different
+   * {@link Attributes} are provided where {@code name}, {@code version}, and {@code schemaUrl} are
+   * identical.
    */
-  public final V get(String instrumentationName) {
-    return get(instrumentationName, null);
-  }
-
-  /**
-   * Returns the registered value associated with this name and version if any, otherwise creates a
-   * new instance and associates it with the given name and version. The schemaUrl will be set to
-   * null.
-   *
-   * @param instrumentationName the name of the instrumentation library.
-   * @param instrumentationVersion the version of the instrumentation library.
-   * @return the registered value associated with this name and version.
-   */
-  public final V get(String instrumentationName, @Nullable String instrumentationVersion) {
-    return get(instrumentationName, instrumentationVersion, null);
-  }
-
-  /**
-   * Returns the registered value associated with this name and version if any, otherwise creates a
-   * new instance and associates it with the given name and version.
-   *
-   * @param instrumentationName the name of the instrumentation library.
-   * @param instrumentationVersion the version of the instrumentation library.
-   * @param schemaUrl the URL of the OpenTelemetry schema used by the instrumentation library.
-   * @return the registered value associated with this name and version.
-   * @since 1.4.0
-   */
-  public final V get(
-      String instrumentationName,
-      @Nullable String instrumentationVersion,
-      @Nullable String schemaUrl) {
-    InstrumentationLibraryInfo instrumentationLibraryInfo =
-        InstrumentationLibraryInfo.create(instrumentationName, instrumentationVersion, schemaUrl);
-
-    // Optimistic lookup, before creating the new component.
-    V component = registry.get(instrumentationLibraryInfo);
-    if (component != null) {
-      return component;
+  public V get(
+      String name, @Nullable String version, @Nullable String schemaUrl, Attributes attributes) {
+    if (version != null && schemaUrl != null) {
+      Map<String, Map<String, V>> componentByVersionAndSchema =
+          componentByNameVersionAndSchema.computeIfAbsent(
+              name, unused -> new ConcurrentHashMap<>());
+      Map<String, V> componentBySchema =
+          componentByVersionAndSchema.computeIfAbsent(version, unused -> new ConcurrentHashMap<>());
+      return componentBySchema.computeIfAbsent(
+          schemaUrl,
+          schemaUrl1 ->
+              buildComponent(
+                  InstrumentationScopeInfo.builder(name)
+                      .setVersion(version)
+                      .setSchemaUrl(schemaUrl1)
+                      .setAttributes(attributes)
+                      .build()));
+    } else if (version != null) { // schemaUrl == null
+      Map<String, V> componentByVersion =
+          componentByNameAndVersion.computeIfAbsent(name, unused -> new ConcurrentHashMap<>());
+      return componentByVersion.computeIfAbsent(
+          version,
+          version1 ->
+              buildComponent(
+                  InstrumentationScopeInfo.builder(name)
+                      .setVersion(version1)
+                      .setAttributes(attributes)
+                      .build()));
     }
+    if (schemaUrl != null) { // version == null
+      Map<String, V> componentBySchema =
+          componentByNameAndSchema.computeIfAbsent(name, unused -> new ConcurrentHashMap<>());
+      return componentBySchema.computeIfAbsent(
+          schemaUrl,
+          schemaUrl1 ->
+              buildComponent(
+                  InstrumentationScopeInfo.builder(name)
+                      .setSchemaUrl(schemaUrl1)
+                      .setAttributes(attributes)
+                      .build()));
+    } else { // schemaUrl == null && version == null
+      return componentByName.computeIfAbsent(
+          name,
+          name1 ->
+              buildComponent(
+                  InstrumentationScopeInfo.builder(name1).setAttributes(attributes).build()));
+    }
+  }
 
-    V newComponent = factory.apply(instrumentationLibraryInfo);
-    V oldComponent = registry.putIfAbsent(instrumentationLibraryInfo, newComponent);
-    return oldComponent != null ? oldComponent : newComponent;
+  private V buildComponent(InstrumentationScopeInfo instrumentationScopeInfo) {
+    V component = factory.apply(instrumentationScopeInfo);
+    synchronized (lock) {
+      allComponents.add(component);
+    }
+    return component;
   }
 
   /**
@@ -86,7 +125,9 @@ public final class ComponentRegistry<V> {
    *
    * @return a {@code Collection} view of the registered components.
    */
-  public final Collection<V> getComponents() {
-    return Collections.unmodifiableCollection(new ArrayList<>(registry.values()));
+  public Collection<V> getComponents() {
+    synchronized (lock) {
+      return Collections.unmodifiableCollection(new ArrayList<>(allComponents));
+    }
   }
 }

@@ -7,28 +7,40 @@ package io.opentelemetry.sdk.metrics;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.opentelemetry.api.metrics.GlobalMeterProvider;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.sdk.resources.Resource;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import org.junit.jupiter.api.Test;
 
 class SdkMeterProviderBuilderTest {
 
   @Test
-  void buildAndRegisterGlobal() {
-    SdkMeterProvider meterProvider = SdkMeterProvider.builder().buildAndRegisterGlobal();
-    try {
-      assertThat(GlobalMeterProvider.get()).isSameAs(meterProvider);
-    } finally {
-      GlobalMeterProvider.set(null);
-    }
-  }
-
-  @Test
   void defaultResource() {
-    SdkMeterProvider meterProvider = SdkMeterProvider.builder().build();
+    // We need a reader to have a resource.
+    SdkMeterProvider meterProvider =
+        SdkMeterProvider.builder().registerMetricReader(InMemoryMetricReader.create()).build();
 
     assertThat(meterProvider)
         .extracting("sharedState")
         .hasFieldOrPropertyWithValue("resource", Resource.getDefault());
+  }
+
+  @Test
+  void addResource() {
+    Resource customResource =
+        Resource.create(
+            Attributes.of(
+                AttributeKey.stringKey("custom_attribute_key"), "custom_attribute_value"));
+
+    SdkMeterProvider sdkMeterProvider =
+        SdkMeterProvider.builder()
+            .registerMetricReader(InMemoryMetricReader.create())
+            .addResource(customResource)
+            .build();
+
+    assertThat(sdkMeterProvider)
+        .extracting("sharedState")
+        .hasFieldOrPropertyWithValue("resource", Resource.getDefault().merge(customResource));
   }
 }

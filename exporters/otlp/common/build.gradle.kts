@@ -4,28 +4,47 @@ plugins {
 
   id("otel.jmh-conventions")
   id("otel.animalsniffer-conventions")
+
+  id("com.squareup.wire")
 }
 
 description = "OpenTelemetry Protocol Exporter"
-otelJava.moduleName.set("io.opentelemetry.exporter.otlp.internal")
+otelJava.moduleName.set("io.opentelemetry.exporter.internal.otlp")
 
+val versions: Map<String, String> by project
 dependencies {
-  api(project(":api:all"))
-  api(project(":proto"))
-  api(project(":sdk:all"))
-  api(project(":sdk:metrics"))
+  protoSource("io.opentelemetry.proto:opentelemetry-proto:${versions["io.opentelemetry.proto"]}")
 
-  implementation("com.google.protobuf:protobuf-java")
+  api(project(":exporters:common"))
+  implementation(project(":api:incubator"))
 
-  compileOnly("io.grpc:grpc-netty")
-  compileOnly("io.grpc:grpc-netty-shaded")
-  compileOnly("io.grpc:grpc-okhttp")
+  compileOnly(project(":sdk:metrics"))
+  compileOnly(project(":sdk:trace"))
+  compileOnly(project(":sdk:logs"))
 
+  testImplementation(project(":sdk:metrics"))
+  testImplementation(project(":sdk:trace"))
+  testImplementation(project(":sdk:logs"))
   testImplementation(project(":sdk:testing"))
 
-  testImplementation("io.grpc:grpc-testing")
-  testRuntimeOnly("io.grpc:grpc-netty-shaded")
+  testImplementation("com.fasterxml.jackson.core:jackson-databind")
+  testImplementation("com.google.protobuf:protobuf-java-util")
+  testImplementation("io.opentelemetry.proto:opentelemetry-proto")
 
   jmhImplementation(project(":sdk:testing"))
-  jmhImplementation(project(":sdk-extensions:resources"))
+  jmhImplementation("com.fasterxml.jackson.core:jackson-core")
+  jmhImplementation("io.opentelemetry.proto:opentelemetry-proto")
+  jmhImplementation("io.grpc:grpc-netty")
+}
+
+wire {
+  root(
+    "opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest",
+    "opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest",
+    "opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest",
+  )
+
+  custom {
+    schemaHandlerFactoryClass = "io.opentelemetry.gradle.ProtoFieldsWireHandlerFactory"
+  }
 }

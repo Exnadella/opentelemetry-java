@@ -12,16 +12,22 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.logs.SdkLoggerProvider;
+import io.opentelemetry.sdk.logs.data.LogRecordData;
+import io.opentelemetry.sdk.logs.export.SimpleLogRecordProcessor;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
+import io.opentelemetry.sdk.metrics.data.AggregationTemporality;
+import io.opentelemetry.sdk.metrics.data.MetricData;
+import io.opentelemetry.sdk.metrics.internal.SdkMeterProviderUtil;
 import io.opentelemetry.sdk.testing.assertj.TracesAssert;
+import io.opentelemetry.sdk.testing.exporter.InMemoryLogRecordExporter;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 import org.junit.jupiter.api.extension.AfterAllCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
@@ -37,13 +43,18 @@ import org.junit.jupiter.api.extension.ExtensionContext;
  * //   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
  * //
  * //   private final Tracer tracer = otelTesting.getOpenTelemetry().getTracer("test");
+ * //   private final Meter meter = otelTesting.getOpenTelemetry().getMeter("test");
  * //
  * //   @Test
  * //   void test() {
  * //     tracer.spanBuilder("name").startSpan().end();
  * //     assertThat(otelTesting.getSpans()).containsExactly(expected);
+ * //
+ * //     LongCounter counter = meter.counterBuilder("counter-name").build();
+ * //     counter.add(1);
+ * //     assertThat(otelTesting.getMetrics()).satisfiesExactlyInAnyOrder(metricData -> {});
  * //   }
- * //  }
+ * // }
  * }</pre>
  */
 public final class OpenTelemetryExtension
@@ -61,22 +72,43 @@ public final class OpenTelemetryExtension
             .addSpanProcessor(SimpleSpanProcessor.create(spanExporter))
             .build();
 
+    InMemoryMetricReader metricReader = InMemoryMetricReader.create();
+
+    SdkMeterProvider meterProvider =
+        SdkMeterProvider.builder().registerMetricReader(metricReader).build();
+
+    InMemoryLogRecordExporter logRecordExporter = InMemoryLogRecordExporter.create();
+
+    SdkLoggerProvider loggerProvider =
+        SdkLoggerProvider.builder()
+            .addLogRecordProcessor(SimpleLogRecordProcessor.create(logRecordExporter))
+            .build();
+
     OpenTelemetrySdk openTelemetry =
         OpenTelemetrySdk.builder()
             .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
             .setTracerProvider(tracerProvider)
+            .setMeterProvider(meterProvider)
+            .setLoggerProvider(loggerProvider)
             .build();
 
-    return new OpenTelemetryExtension(openTelemetry, spanExporter);
+    return new OpenTelemetryExtension(openTelemetry, spanExporter, metricReader, logRecordExporter);
   }
 
   private final OpenTelemetrySdk openTelemetry;
   private final InMemorySpanExporter spanExporter;
+  private final InMemoryMetricReader metricReader;
+  private final InMemoryLogRecordExporter logRecordExporter;
 
   private OpenTelemetryExtension(
-      OpenTelemetrySdk openTelemetry, InMemorySpanExporter spanExporter) {
+      OpenTelemetrySdk openTelemetry,
+      InMemorySpanExporter spanExporter,
+      InMemoryMetricReader metricReader,
+      InMemoryLogRecordExporter logRecordExporter) {
     this.openTelemetry = openTelemetry;
     this.spanExporter = spanExporter;
+    this.metricReader = metricReader;
+    this.logRecordExporter = logRecordExporter;
   }
 
   /** Returns the {@link OpenTelemetrySdk} created by this extension. */
@@ -90,19 +122,29 @@ public final class OpenTelemetryExtension
   }
 
   /**
+   * Returns the current {@link MetricData} in {@link AggregationTemporality#CUMULATIVE} format.
+   *
+   * @since 1.15.0
+   */
+  public List<MetricData> getMetrics() {
+    return new ArrayList<>(metricReader.collectAllMetrics());
+  }
+
+  /**
+   * Returns all the exported {@link LogRecordData} so far.
+   *
+   * @since 1.32.0
+   */
+  public List<LogRecordData> getLogRecords() {
+    return new ArrayList<>(logRecordExporter.getFinishedLogRecordItems());
+  }
+
+  /**
    * Returns a {@link TracesAssert} for asserting on the currently exported traces. This method
    * requires AssertJ to be on the classpath.
    */
   public TracesAssert assertTraces() {
-    Map<String, List<SpanData>> traces =
-        getSpans().stream()
-            .collect(
-                Collectors.groupingBy(
-                    SpanData::getTraceId, LinkedHashMap::new, Collectors.toList()));
-    for (List<SpanData> trace : traces.values()) {
-      trace.sort(Comparator.comparing(SpanData::getStartEpochNanos));
-    }
-    return assertThat(traces.values());
+    return assertThat(spanExporter.getFinishedSpanItems());
   }
 
   /**
@@ -113,9 +155,30 @@ public final class OpenTelemetryExtension
     spanExporter.reset();
   }
 
+  /**
+   * Clears all registered metric instruments, such that {@link #getMetrics()} is empty.
+   *
+   * @since 1.15.0
+   */
+  public void clearMetrics() {
+    SdkMeterProviderUtil.resetForTest(openTelemetry.getSdkMeterProvider());
+  }
+
+  /**
+   * Clears the collected exported {@link LogRecordData}. Consider making your test smaller instead
+   * of manually clearing state using this method.
+   *
+   * @since 1.32.0
+   */
+  public void clearLogRecords() {
+    logRecordExporter.reset();
+  }
+
   @Override
   public void beforeEach(ExtensionContext context) {
     clearSpans();
+    clearMetrics();
+    clearLogRecords();
   }
 
   @Override
@@ -127,5 +190,6 @@ public final class OpenTelemetryExtension
   @Override
   public void afterAll(ExtensionContext context) {
     GlobalOpenTelemetry.resetForTest();
+    openTelemetry.close();
   }
 }

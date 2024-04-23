@@ -5,7 +5,12 @@
 
 package io.opentelemetry.api;
 
+import io.opentelemetry.api.internal.ConfigUtil;
 import io.opentelemetry.api.internal.GuardedBy;
+import io.opentelemetry.api.logs.LoggerProvider;
+import io.opentelemetry.api.metrics.Meter;
+import io.opentelemetry.api.metrics.MeterBuilder;
+import io.opentelemetry.api.metrics.MeterProvider;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.api.trace.TracerBuilder;
 import io.opentelemetry.api.trace.TracerProvider;
@@ -24,19 +29,35 @@ import javax.annotation.concurrent.ThreadSafe;
  * <p>If using the OpenTelemetry SDK, you may want to instantiate the {@link OpenTelemetry} to
  * provide configuration, for example of {@code Resource} or {@code Sampler}. See {@code
  * OpenTelemetrySdk} and {@code OpenTelemetrySdk.builder} for information on how to construct the
- * SDK {@link OpenTelemetry}.
+ * SDK's {@link OpenTelemetry} implementation.
+ *
+ * <p>WARNING: Due to the inherent complications around initialization order involving this class
+ * and its single global instance, we strongly recommend *not* using GlobalOpenTelemetry unless you
+ * have a use-case that absolutely requires it. Please favor using instances of OpenTelemetry
+ * wherever possible.
+ *
+ * <p>If you are using the OpenTelemetry javaagent, it is generally best to only call
+ * GlobalOpenTelemetry.get() once, and then pass the resulting reference where you need to use it.
  *
  * @see TracerProvider
  * @see ContextPropagators
  */
+// We intentionally assign to be use for error reporting.
+@SuppressWarnings("StaticAssignmentOfThrowable")
 public final class GlobalOpenTelemetry {
+
+  private static final String GLOBAL_AUTOCONFIGURE_ENABLED_PROPERTY =
+      "otel.java.global-autoconfigure.enabled";
 
   private static final Logger logger = Logger.getLogger(GlobalOpenTelemetry.class.getName());
 
   private static final Object mutex = new Object();
 
-  @Nullable private static volatile ObfuscatedOpenTelemetry globalOpenTelemetry;
+  @SuppressWarnings("NonFinalStaticField")
+  @Nullable
+  private static volatile ObfuscatedOpenTelemetry globalOpenTelemetry;
 
+  @SuppressWarnings("NonFinalStaticField")
   @GuardedBy("mutex")
   @Nullable
   private static Throwable setGlobalCaller;
@@ -50,11 +71,13 @@ public final class GlobalOpenTelemetry {
    *     interface FQCN but the specified provider cannot be found.
    */
   public static OpenTelemetry get() {
-    if (globalOpenTelemetry == null) {
+    OpenTelemetry openTelemetry = globalOpenTelemetry;
+    if (openTelemetry == null) {
       synchronized (mutex) {
-        if (globalOpenTelemetry == null) {
+        openTelemetry = globalOpenTelemetry;
+        if (openTelemetry == null) {
 
-          OpenTelemetry autoConfigured = maybeAutoConfigure();
+          OpenTelemetry autoConfigured = maybeAutoConfigureAndSetGlobal();
           if (autoConfigured != null) {
             return autoConfigured;
           }
@@ -64,7 +87,7 @@ public final class GlobalOpenTelemetry {
         }
       }
     }
-    return globalOpenTelemetry;
+    return openTelemetry;
   }
 
   /**
@@ -101,44 +124,82 @@ public final class GlobalOpenTelemetry {
   /**
    * Gets or creates a named tracer instance from the globally registered {@link TracerProvider}.
    *
-   * <p>This is a shortcut method for {@code getTracerProvider().get(instrumentationName)}
+   * <p>This is a shortcut method for {@code getTracerProvider().get(instrumentationScopeName)}
    *
-   * @param instrumentationName The name of the instrumentation library, not the name of the
-   *     instrument*ed* library (e.g., "io.opentelemetry.contrib.mongodb"). Must not be null.
+   * @param instrumentationScopeName A name uniquely identifying the instrumentation scope, such as
+   *     the instrumentation library, package, or fully qualified class name. Must not be null.
    * @return a tracer instance.
    */
-  public static Tracer getTracer(String instrumentationName) {
-    return get().getTracer(instrumentationName);
+  public static Tracer getTracer(String instrumentationScopeName) {
+    return get().getTracer(instrumentationScopeName);
   }
 
   /**
    * Gets or creates a named and versioned tracer instance from the globally registered {@link
    * TracerProvider}.
    *
-   * <p>This is a shortcut method for {@code getTracerProvider().get(instrumentationName,
-   * instrumentationVersion)}
+   * <p>This is a shortcut method for {@code getTracerProvider().get(instrumentationScopeName,
+   * instrumentationScopeVersion)}
    *
-   * @param instrumentationName The name of the instrumentation library, not the name of the
-   *     instrument*ed* library (e.g., "io.opentelemetry.contrib.mongodb"). Must not be null.
-   * @param instrumentationVersion The version of the instrumentation library (e.g., "1.0.0").
+   * @param instrumentationScopeName A name uniquely identifying the instrumentation scope, such as
+   *     the instrumentation library, package, or fully qualified class name. Must not be null.
+   * @param instrumentationScopeVersion The version of the instrumentation scope (e.g., "1.0.0").
    * @return a tracer instance.
    */
-  public static Tracer getTracer(String instrumentationName, String instrumentationVersion) {
-    return get().getTracer(instrumentationName, instrumentationVersion);
+  public static Tracer getTracer(
+      String instrumentationScopeName, String instrumentationScopeVersion) {
+    return get().getTracer(instrumentationScopeName, instrumentationScopeVersion);
   }
 
   /**
    * Creates a TracerBuilder for a named {@link Tracer} instance.
    *
-   * <p>This is a shortcut method for {@code get().tracerBuilder(instrumentationName)}
+   * <p>This is a shortcut method for {@code get().tracerBuilder(instrumentationScopeName)}
    *
-   * @param instrumentationName The name of the instrumentation library, not the name of the
-   *     instrument*ed* library.
+   * @param instrumentationScopeName A name uniquely identifying the instrumentation scope, such as
+   *     the instrumentation library, package, or fully qualified class name. Must not be null.
    * @return a TracerBuilder instance.
    * @since 1.4.0
    */
-  public static TracerBuilder tracerBuilder(String instrumentationName) {
-    return get().tracerBuilder(instrumentationName);
+  public static TracerBuilder tracerBuilder(String instrumentationScopeName) {
+    return get().tracerBuilder(instrumentationScopeName);
+  }
+
+  /**
+   * Returns the globally registered {@link MeterProvider}.
+   *
+   * @since 1.10.0
+   */
+  public static MeterProvider getMeterProvider() {
+    return get().getMeterProvider();
+  }
+
+  /**
+   * Gets or creates a named meter instance from the globally registered {@link MeterProvider}.
+   *
+   * <p>This is a shortcut method for {@code getMeterProvider().get(instrumentationScopeName)}
+   *
+   * @param instrumentationScopeName A name uniquely identifying the instrumentation scope, such as
+   *     the instrumentation library, package, or fully qualified class name. Must not be null.
+   * @return a Meter instance.
+   * @since 1.10.0
+   */
+  public static Meter getMeter(String instrumentationScopeName) {
+    return get().getMeter(instrumentationScopeName);
+  }
+
+  /**
+   * Creates a MeterBuilder for a named {@link Meter} instance.
+   *
+   * <p>This is a shortcut method for {@code get().meterBuilder(instrumentationScopeName)}
+   *
+   * @param instrumentationScopeName A name uniquely identifying the instrumentation scope, such as
+   *     the instrumentation library, package, or fully qualified class name. Must not be null.
+   * @return a MeterBuilder instance.
+   * @since 1.10.0
+   */
+  public static MeterBuilder meterBuilder(String instrumentationScopeName) {
+    return get().meterBuilder(instrumentationScopeName);
   }
 
   /**
@@ -157,21 +218,38 @@ public final class GlobalOpenTelemetry {
   }
 
   @Nullable
-  private static OpenTelemetry maybeAutoConfigure() {
-    final Class<?> openTelemetrySdkAutoConfiguration;
+  private static OpenTelemetry maybeAutoConfigureAndSetGlobal() {
+    Class<?> openTelemetrySdkAutoConfiguration;
     try {
       openTelemetrySdkAutoConfiguration =
-          Class.forName("io.opentelemetry.sdk.autoconfigure.OpenTelemetrySdkAutoConfiguration");
+          Class.forName("io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk");
     } catch (ClassNotFoundException e) {
+      return null;
+    }
+
+    // If autoconfigure module is present but global autoconfigure disabled log a warning and return
+    boolean globalAutoconfigureEnabled =
+        Boolean.parseBoolean(ConfigUtil.getString(GLOBAL_AUTOCONFIGURE_ENABLED_PROPERTY, "false"));
+    if (!globalAutoconfigureEnabled) {
+      logger.log(
+          Level.INFO,
+          "AutoConfiguredOpenTelemetrySdk found on classpath but automatic configuration is disabled."
+              + " To enable, run your JVM with -D"
+              + GLOBAL_AUTOCONFIGURE_ENABLED_PROPERTY
+              + "=true");
       return null;
     }
 
     try {
       Method initialize = openTelemetrySdkAutoConfiguration.getMethod("initialize");
-      return (OpenTelemetry) initialize.invoke(null);
+      Object autoConfiguredSdk = initialize.invoke(null);
+      Method getOpenTelemetrySdk =
+          openTelemetrySdkAutoConfiguration.getMethod("getOpenTelemetrySdk");
+      return new ObfuscatedOpenTelemetry(
+          (OpenTelemetry) getOpenTelemetrySdk.invoke(autoConfiguredSdk));
     } catch (NoSuchMethodException | IllegalAccessException e) {
       throw new IllegalStateException(
-          "OpenTelemetrySdkAutoConfiguration detected on classpath "
+          "AutoConfiguredOpenTelemetrySdk detected on classpath "
               + "but could not invoke initialize method. This is a bug in OpenTelemetry.",
           e);
     } catch (InvocationTargetException t) {
@@ -203,13 +281,23 @@ public final class GlobalOpenTelemetry {
     }
 
     @Override
+    public MeterProvider getMeterProvider() {
+      return delegate.getMeterProvider();
+    }
+
+    @Override
+    public LoggerProvider getLogsBridge() {
+      return delegate.getLogsBridge();
+    }
+
+    @Override
     public ContextPropagators getPropagators() {
       return delegate.getPropagators();
     }
 
     @Override
-    public TracerBuilder tracerBuilder(String instrumentationName) {
-      return delegate.tracerBuilder(instrumentationName);
+    public TracerBuilder tracerBuilder(String instrumentationScopeName) {
+      return delegate.tracerBuilder(instrumentationScopeName);
     }
   }
 }

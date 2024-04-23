@@ -9,6 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
+import io.opentelemetry.api.logs.LoggerProvider;
+import io.opentelemetry.api.metrics.MeterProvider;
 import io.opentelemetry.api.trace.TracerProvider;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +33,8 @@ class OpenTelemetryTest {
   void testDefault() {
     assertThat(OpenTelemetry.noop().getTracerProvider()).isSameAs(TracerProvider.noop());
     assertThat(OpenTelemetry.noop().getPropagators()).isSameAs(ContextPropagators.noop());
+    assertThat(OpenTelemetry.noop().getMeterProvider()).isSameAs(MeterProvider.noop());
+    assertThat(OpenTelemetry.noop().getLogsBridge()).isSameAs(LoggerProvider.noop());
   }
 
   @Test
@@ -39,6 +43,8 @@ class OpenTelemetryTest {
     OpenTelemetry openTelemetry = OpenTelemetry.propagating(contextPropagators);
 
     assertThat(openTelemetry.getTracerProvider()).isSameAs(TracerProvider.noop());
+    assertThat(openTelemetry.getMeterProvider()).isSameAs(MeterProvider.noop());
+    assertThat(openTelemetry.getLogsBridge()).isSameAs(LoggerProvider.noop());
     assertThat(openTelemetry.getPropagators()).isSameAs(contextPropagators);
   }
 
@@ -77,6 +83,15 @@ class OpenTelemetryTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("GlobalOpenTelemetry.set has already been called")
         .hasStackTraceContaining("getOpenTelemetry");
+  }
+
+  @Test
+  void toString_noop_Valid() {
+    assertThat(OpenTelemetry.noop().toString())
+        .isEqualTo(
+            "DefaultOpenTelemetry{"
+                + "propagators=DefaultContextPropagators{textMapPropagator=NoopTextMapPropagator}"
+                + "}");
   }
 
   private static void setOpenTelemetry() {

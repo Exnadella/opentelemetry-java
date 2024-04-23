@@ -18,7 +18,7 @@ import java.util.Collections;
 import java.util.List;
 import javax.annotation.Nullable;
 
-class OpenTelemetryTextFormatImpl extends TextFormat {
+final class OpenTelemetryTextFormatImpl extends TextFormat {
 
   private final TextMapPropagator propagator;
 
@@ -35,7 +35,8 @@ class OpenTelemetryTextFormatImpl extends TextFormat {
   public <C> void inject(SpanContext spanContext, C carrier, Setter<C> setter) {
     io.opentelemetry.api.trace.SpanContext otelSpanContext = mapSpanContext(spanContext);
     Context otelContext = Context.current().with(Span.wrap(otelSpanContext));
-    propagator.inject(otelContext, carrier, setter::put);
+    // Use explicit lambda instead of method reference for nullness check.
+    propagator.inject(otelContext, carrier, (c, key, value) -> setter.put(c, key, value));
   }
 
   @Override

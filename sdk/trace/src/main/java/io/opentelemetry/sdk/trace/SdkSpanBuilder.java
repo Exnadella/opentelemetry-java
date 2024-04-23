@@ -12,6 +12,7 @@ import static io.opentelemetry.api.common.AttributeKey.stringKey;
 
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.internal.ImmutableSpanContext;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanContext;
@@ -19,8 +20,9 @@ import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Context;
-import io.opentelemetry.sdk.common.Clock;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.internal.AttributeUtil;
+import io.opentelemetry.sdk.internal.AttributesMap;
 import io.opentelemetry.sdk.trace.data.LinkData;
 import io.opentelemetry.sdk.trace.samplers.SamplingDecision;
 import io.opentelemetry.sdk.trace.samplers.SamplingResult;
@@ -34,7 +36,7 @@ import javax.annotation.Nullable;
 final class SdkSpanBuilder implements SpanBuilder {
 
   private final String spanName;
-  private final InstrumentationLibraryInfo instrumentationLibraryInfo;
+  private final InstrumentationScopeInfo instrumentationScopeInfo;
   private final TracerSharedState tracerSharedState;
   private final SpanLimits spanLimits;
 
@@ -47,11 +49,11 @@ final class SdkSpanBuilder implements SpanBuilder {
 
   SdkSpanBuilder(
       String spanName,
-      InstrumentationLibraryInfo instrumentationLibraryInfo,
+      InstrumentationScopeInfo instrumentationScopeInfo,
       TracerSharedState tracerSharedState,
       SpanLimits spanLimits) {
     this.spanName = spanName;
-    this.instrumentationLibraryInfo = instrumentationLibraryInfo;
+    this.instrumentationScopeInfo = instrumentationScopeInfo;
     this.tracerSharedState = tracerSharedState;
     this.spanLimits = spanLimits;
   }
@@ -101,8 +103,10 @@ final class SdkSpanBuilder implements SpanBuilder {
     addLink(
         LinkData.create(
             spanContext,
-            RecordEventsReadableSpan.applyAttributesLimit(
-                attributes, spanLimits.getMaxNumberOfAttributesPerLink()),
+            AttributeUtil.applyAttributesLimit(
+                attributes,
+                spanLimits.getMaxNumberOfAttributesPerLink(),
+                spanLimits.getMaxAttributeValueLength()),
             totalAttributeCount));
     return this;
   }
@@ -146,11 +150,7 @@ final class SdkSpanBuilder implements SpanBuilder {
     if (key == null || key.getKey().isEmpty() || value == null) {
       return this;
     }
-    if (attributes == null) {
-      attributes = new AttributesMap(spanLimits.getMaxNumberOfAttributes());
-    }
-
-    attributes.put(key, value);
+    attributes().put(key, value);
     return this;
   }
 
@@ -166,10 +166,10 @@ final class SdkSpanBuilder implements SpanBuilder {
   @Override
   @SuppressWarnings({"unchecked", "rawtypes"})
   public Span startSpan() {
-    final Context parentContext = parent == null ? Context.current() : parent;
-    final Span parentSpan = Span.fromContext(parentContext);
-    final SpanContext parentSpanContext = parentSpan.getSpanContext();
-    final String traceId;
+    Context parentContext = parent == null ? Context.current() : parent;
+    Span parentSpan = Span.fromContext(parentContext);
+    SpanContext parentSpanContext = parentSpan.getSpanContext();
+    String traceId;
     IdGenerator idGenerator = tracerSharedState.getIdGenerator();
     String spanId = idGenerator.generateSpanId();
     if (!parentSpanContext.isValid()) {
@@ -179,8 +179,9 @@ final class SdkSpanBuilder implements SpanBuilder {
       // New child span.
       traceId = parentSpanContext.getTraceId();
     }
+    List<LinkData> currentLinks = links;
     List<LinkData> immutableLinks =
-        links == null ? Collections.emptyList() : Collections.unmodifiableList(links);
+        currentLinks == null ? Collections.emptyList() : Collections.unmodifiableList(currentLinks);
     // Avoid any possibility to modify the links list by adding links to the Builder after the
     // startSpan is called. If that happens all the links will be added in a new list.
     links = null;
@@ -195,21 +196,20 @@ final class SdkSpanBuilder implements SpanBuilder {
     TraceState samplingResultTraceState =
         samplingResult.getUpdatedTraceState(parentSpanContext.getTraceState());
     SpanContext spanContext =
-        SpanContext.create(
+        ImmutableSpanContext.create(
             traceId,
             spanId,
             isSampled(samplingDecision) ? TraceFlags.getSampled() : TraceFlags.getDefault(),
-            samplingResultTraceState);
+            samplingResultTraceState,
+            /* remote= */ false,
+            tracerSharedState.isIdGeneratorSafeToSkipIdValidation());
 
     if (!isRecording(samplingDecision)) {
       return Span.wrap(spanContext);
     }
     Attributes samplingAttributes = samplingResult.getAttributes();
     if (!samplingAttributes.isEmpty()) {
-      if (attributes == null) {
-        attributes = new AttributesMap(spanLimits.getMaxNumberOfAttributes());
-      }
-      samplingAttributes.forEach((key, value) -> attributes.put((AttributeKey) key, value));
+      samplingAttributes.forEach((key, value) -> attributes().put((AttributeKey) key, value));
     }
 
     // Avoid any possibility to modify the attributes by adding attributes to the Builder after the
@@ -217,30 +217,32 @@ final class SdkSpanBuilder implements SpanBuilder {
     AttributesMap recordedAttributes = attributes;
     attributes = null;
 
-    return RecordEventsReadableSpan.startSpan(
+    return SdkSpan.startSpan(
         spanContext,
         spanName,
-        instrumentationLibraryInfo,
+        instrumentationScopeInfo,
         spanKind,
-        parentSpanContext,
+        parentSpan,
         parentContext,
         spanLimits,
         tracerSharedState.getActiveSpanProcessor(),
-        getClock(parentSpan, tracerSharedState.getClock()),
+        tracerSharedState.getClock(),
         tracerSharedState.getResource(),
         recordedAttributes,
-        immutableLinks,
+        currentLinks,
         totalNumberOfLinksAdded,
         startEpochNanos);
   }
 
-  private static AnchoredClock getClock(Span parent, Clock clock) {
-    if (parent instanceof RecordEventsReadableSpan) {
-      RecordEventsReadableSpan parentRecordEventsSpan = (RecordEventsReadableSpan) parent;
-      return parentRecordEventsSpan.getClock();
-    } else {
-      return AnchoredClock.create(clock);
+  private AttributesMap attributes() {
+    AttributesMap attributes = this.attributes;
+    if (attributes == null) {
+      this.attributes =
+          AttributesMap.create(
+              spanLimits.getMaxNumberOfAttributes(), spanLimits.getMaxAttributeValueLength());
+      attributes = this.attributes;
     }
+    return attributes;
   }
 
   // Visible for testing

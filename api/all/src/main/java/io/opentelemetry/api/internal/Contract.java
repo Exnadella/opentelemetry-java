@@ -87,11 +87,14 @@ import java.lang.annotation.Target;
  *
  * <p>This annotation is the same provided with Jetbrains annotations and used by Nullaway for
  * verifying nullness. We copy the annotation to avoid an external dependency.
+ *
+ * <p>This class is internal and is hence not for public use. Its APIs are unstable and can change
+ * at any time.
  */
 @Documented
-@Retention(RetentionPolicy.SOURCE)
+@Retention(RetentionPolicy.CLASS)
 @Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
-public @interface Contract {
+@interface Contract {
   /**
    * Contains the contract clauses describing causal relations between call arguments and the
    * returned value.

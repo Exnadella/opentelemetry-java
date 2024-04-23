@@ -5,6 +5,7 @@
 
 package io.opentelemetry.opentracingshim;
 
+import static io.opentelemetry.api.common.AttributeKey.stringKey;
 import static io.opentelemetry.opentracingshim.TestUtils.getBaggageMap;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -15,10 +16,16 @@ import io.opentelemetry.sdk.trace.ReadableSpan;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.sdk.trace.data.SpanData;
-import io.opentelemetry.semconv.trace.attributes.SemanticAttributes;
+import io.opentelemetry.sdk.trace.data.StatusData;
 import io.opentracing.log.Fields;
+import io.opentracing.tag.Tags;
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,15 +34,13 @@ class SpanShimTest {
 
   private final SdkTracerProvider tracerSdkFactory = SdkTracerProvider.builder().build();
   private final Tracer tracer = tracerSdkFactory.get("SpanShimTest");
-  private final TelemetryInfo telemetryInfo =
-      new TelemetryInfo(tracer, OpenTracingPropagators.builder().build());
   private Span span;
 
   private static final String SPAN_NAME = "Span";
 
   @BeforeEach
   void setUp() {
-    span = telemetryInfo.tracer().spanBuilder(SPAN_NAME).startSpan();
+    span = tracer.spanBuilder(SPAN_NAME).startSpan();
   }
 
   @AfterEach
@@ -45,19 +50,55 @@ class SpanShimTest {
 
   @Test
   void context_simple() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
 
     SpanContextShim contextShim = (SpanContextShim) spanShim.context();
     assertThat(contextShim).isNotNull();
     assertThat(span.getSpanContext()).isEqualTo(contextShim.getSpanContext());
-    assertThat(span.getSpanContext().getTraceId().toString()).isEqualTo(contextShim.toTraceId());
-    assertThat(span.getSpanContext().getSpanId().toString()).isEqualTo(contextShim.toSpanId());
+    assertThat(span.getSpanContext().getTraceId()).isEqualTo(contextShim.toTraceId());
+    assertThat(span.getSpanContext().getSpanId()).isEqualTo(contextShim.toSpanId());
     assertThat(contextShim.baggageItems().iterator().hasNext()).isFalse();
   }
 
   @Test
+  void setAttribute_errorAsBoolean() {
+    SpanShim spanShim = new SpanShim(span);
+    spanShim.setTag(Tags.ERROR.getKey(), true);
+
+    SpanData spanData = ((ReadableSpan) span).toSpanData();
+    assertThat(spanData.getStatus()).isEqualTo(StatusData.error());
+
+    spanShim.setTag(Tags.ERROR.getKey(), false);
+    spanData = ((ReadableSpan) span).toSpanData();
+    assertThat(spanData.getStatus()).isEqualTo(StatusData.ok());
+  }
+
+  @Test
+  void setAttribute_errorAsString() {
+    SpanShim spanShim = new SpanShim(span);
+    spanShim.setTag(Tags.ERROR.getKey(), "tRuE");
+
+    SpanData spanData = ((ReadableSpan) span).toSpanData();
+    assertThat(spanData.getStatus()).isEqualTo(StatusData.error());
+
+    spanShim.setTag(Tags.ERROR.getKey(), "FaLsE");
+    spanData = ((ReadableSpan) span).toSpanData();
+    assertThat(spanData.getStatus()).isEqualTo(StatusData.ok());
+  }
+
+  @Test
+  void setAttribute_unrecognizedType() {
+    SpanShim spanShim = new SpanShim(span);
+    spanShim.setTag("foo", BigInteger.ONE);
+
+    SpanData spanData = ((ReadableSpan) span).toSpanData();
+    assertThat(spanData.getAttributes().size()).isEqualTo(1);
+    assertThat(spanData.getAttributes().get(stringKey("foo"))).isEqualTo("1");
+  }
+
+  @Test
   void baggage() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
 
     spanShim.setBaggageItem("key1", "value1");
     spanShim.setBaggageItem("key2", "value2");
@@ -74,7 +115,7 @@ class SpanShimTest {
 
   @Test
   void baggage_replacement() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     SpanContextShim contextShim1 = (SpanContextShim) spanShim.context();
 
     spanShim.setBaggageItem("key1", "value1");
@@ -84,24 +125,26 @@ class SpanShimTest {
     assertThat(contextShim2.baggageItems().iterator()).hasNext(); /* updated, with values */
   }
 
+  @SuppressWarnings("FutureReturnValueIgnored")
   @Test
-  void baggage_differentShimObjs() {
-    SpanShim spanShim1 = new SpanShim(telemetryInfo, span);
-    spanShim1.setBaggageItem("key1", "value1");
+  void baggage_multipleThreads() throws Exception {
+    ExecutorService executor = Executors.newCachedThreadPool();
+    SpanShim spanShim = new SpanShim(span);
+    int baggageItemsCount = 100;
 
-    /* Baggage should be synchronized among different SpanShim objects
-     * referring to the same Span.*/
-    SpanShim spanShim2 = new SpanShim(telemetryInfo, span);
-    spanShim2.setBaggageItem("key1", "value2");
-    assertThat(spanShim1.getBaggageItem("key1")).isEqualTo("value2");
-    assertThat(spanShim2.getBaggageItem("key1")).isEqualTo("value2");
-    assertThat(getBaggageMap(spanShim2.context().baggageItems()))
-        .isEqualTo(getBaggageMap(spanShim1.context().baggageItems()));
+    IntStream.range(0, baggageItemsCount)
+        .forEach(i -> executor.execute(() -> spanShim.setBaggageItem("key-" + i, "value-" + i)));
+    executor.shutdown();
+    executor.awaitTermination(5, TimeUnit.SECONDS);
+
+    for (int i = 0; i < baggageItemsCount; i++) {
+      assertThat(spanShim.getBaggageItem("key-" + i)).isEqualTo("value-" + i);
+    }
   }
 
   @Test
   void finish_micros() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     long micros = 123447307984L;
     spanShim.finish(micros);
     SpanData spanData = ((ReadableSpan) span).toSpanData();
@@ -110,7 +153,7 @@ class SpanShimTest {
 
   @Test
   public void log_error() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     Map<String, Object> fields = createErrorFields();
     spanShim.log(fields);
     SpanData spanData = ((ReadableSpan) span).toSpanData();
@@ -119,7 +162,7 @@ class SpanShimTest {
 
   @Test
   public void log_error_with_timestamp() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     Map<String, Object> fields = createErrorFields();
     long micros = 123447307984L;
     spanShim.log(micros, fields);
@@ -129,7 +172,7 @@ class SpanShimTest {
 
   @Test
   public void log_exception() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     Map<String, Object> fields = createExceptionFields();
     spanShim.log(fields);
     SpanData spanData = ((ReadableSpan) span).toSpanData();
@@ -140,8 +183,8 @@ class SpanShimTest {
 
   @Test
   public void log_error_with_exception() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
-    final Map<String, Object> fields = createExceptionFields();
+    SpanShim spanShim = new SpanShim(span);
+    Map<String, Object> fields = createExceptionFields();
     fields.putAll(createErrorFields());
 
     long micros = 123447307984L;
@@ -152,7 +195,7 @@ class SpanShimTest {
 
   @Test
   public void log_exception_with_timestamp() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     Map<String, Object> fields = createExceptionFields();
     long micros = 123447307984L;
     spanShim.log(micros, fields);
@@ -164,7 +207,7 @@ class SpanShimTest {
 
   @Test
   public void log_fields() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     spanShim.log(putKeyValuePairsToMap(new HashMap<>()));
     SpanData spanData = ((ReadableSpan) span).toSpanData();
     verifyAttributes(spanData.getEvents().get(0));
@@ -172,7 +215,7 @@ class SpanShimTest {
 
   @Test
   void log_micros() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     long micros = 123447307984L;
     spanShim.log(micros, "event");
     SpanData spanData = ((ReadableSpan) span).toSpanData();
@@ -181,7 +224,7 @@ class SpanShimTest {
 
   @Test
   void log_fields_micros() {
-    SpanShim spanShim = new SpanShim(telemetryInfo, span);
+    SpanShim spanShim = new SpanShim(span);
     long micros = 123447307984L;
     spanShim.log(micros, putKeyValuePairsToMap(new HashMap<>()));
     SpanData spanData = ((ReadableSpan) span).toSpanData();
@@ -232,28 +275,15 @@ class SpanShimTest {
 
     EventData eventData = spanData.getEvents().get(0);
     assertThat(eventData.getName()).isEqualTo("exception");
-    assertThat(
-            eventData
-                .getAttributes()
-                .get(AttributeKey.stringKey(SemanticAttributes.EXCEPTION_TYPE.getKey())))
-        .isEqualTo("kind");
-    assertThat(
-            eventData
-                .getAttributes()
-                .get(AttributeKey.stringKey(SemanticAttributes.EXCEPTION_MESSAGE.getKey())))
-        .isEqualTo("message");
-    assertThat(
-            eventData
-                .getAttributes()
-                .get(AttributeKey.stringKey(SemanticAttributes.EXCEPTION_STACKTRACE.getKey())))
-        .isEqualTo("stack");
+    assertThat(eventData.getAttributes().get(stringKey("exception.type"))).isEqualTo("kind");
+    assertThat(eventData.getAttributes().get(stringKey("exception.message"))).isEqualTo("message");
+    assertThat(eventData.getAttributes().get(stringKey("exception.stacktrace"))).isEqualTo("stack");
 
     verifyAttributes(eventData);
   }
 
   private static void verifyAttributes(EventData eventData) {
-    assertThat(eventData.getAttributes().get(AttributeKey.stringKey("keyForString")))
-        .isEqualTo("value");
+    assertThat(eventData.getAttributes().get(stringKey("keyForString"))).isEqualTo("value");
     assertThat(eventData.getAttributes().get(AttributeKey.longKey("keyForInt"))).isEqualTo(1);
     assertThat(eventData.getAttributes().get(AttributeKey.doubleKey("keyForDouble")))
         .isEqualTo(1.0);

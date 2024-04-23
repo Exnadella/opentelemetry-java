@@ -106,7 +106,7 @@ class JaegerPropagatorTest {
 
   @Test
   void inject_SampledContext_nullCarrierUsage() {
-    final Map<String, String> carrier = new LinkedHashMap<>();
+    Map<String, String> carrier = new LinkedHashMap<>();
 
     jaegerPropagator.inject(
         withSpanContext(
@@ -458,6 +458,11 @@ class JaegerPropagatorTest {
             SpanContext.create(TRACE_ID, SPAN_ID, TraceFlags.getDefault(), TraceState.getDefault()),
             Context.current());
     assertThat(jaegerPropagator.extract(context, Collections.emptyMap(), null)).isSameAs(context);
+  }
+
+  @Test
+  void toString_Valid() {
+    assertThat(jaegerPropagator.toString()).isEqualTo("JaegerPropagator");
   }
 
   private static String generateTraceIdHeaderValue(

@@ -5,65 +5,92 @@
 
 package io.opentelemetry.sdk.internal;
 
+import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.api.common.Attributes;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
-/** Tests for {@link InstrumentationLibraryInfo}. */
 class ComponentRegistryTest {
 
-  private static final String INSTRUMENTATION_NAME = "test_name";
-  private static final String INSTRUMENTATION_VERSION = "version";
+  private static final String NAME = "test_name";
+  private static final String VERSION = "version";
+  private static final String SCHEMA_URL = "http://schema.com";
+  private static final Attributes ATTRIBUTES = Attributes.builder().put("k1", "v1").build();
   private final ComponentRegistry<TestComponent> registry =
-      new ComponentRegistry<>(TestComponent::new);
+      new ComponentRegistry<>(unused -> new TestComponent());
 
   @Test
-  void libraryName_MustNotBeNull() {
-    assertThatThrownBy(() -> registry.get(null, "version"))
-        .isInstanceOf(NullPointerException.class)
-        .hasMessage("name");
+  void get_SameInstance() {
+    assertThat(registry.get(NAME, null, null, Attributes.empty()))
+        .isSameAs(registry.get(NAME, null, null, Attributes.empty()))
+        .isSameAs(registry.get(NAME, null, null, Attributes.builder().put("k1", "v2").build()));
+
+    assertThat(registry.get(NAME, VERSION, null, Attributes.empty()))
+        .isSameAs(registry.get(NAME, VERSION, null, Attributes.empty()))
+        .isSameAs(registry.get(NAME, VERSION, null, Attributes.builder().put("k1", "v2").build()));
+    assertThat(registry.get(NAME, null, SCHEMA_URL, Attributes.empty()))
+        .isSameAs(registry.get(NAME, null, SCHEMA_URL, Attributes.empty()))
+        .isSameAs(
+            registry.get(NAME, null, SCHEMA_URL, Attributes.builder().put("k1", "v2").build()));
+    assertThat(registry.get(NAME, VERSION, SCHEMA_URL, Attributes.empty()))
+        .isSameAs(registry.get(NAME, VERSION, SCHEMA_URL, Attributes.empty()))
+        .isSameAs(
+            registry.get(NAME, VERSION, SCHEMA_URL, Attributes.builder().put("k1", "v2").build()));
   }
 
   @Test
-  void libraryVersion_AllowsNull() {
-    TestComponent testComponent = registry.get(INSTRUMENTATION_NAME, null);
-    assertThat(testComponent).isNotNull();
-    assertThat(testComponent.instrumentationLibraryInfo.getName()).isEqualTo(INSTRUMENTATION_NAME);
-    assertThat(testComponent.instrumentationLibraryInfo.getVersion()).isNull();
+  void get_DifferentInstance() {
+    assertThat(registry.get(NAME, VERSION, SCHEMA_URL, ATTRIBUTES))
+        .isNotSameAs(registry.get(NAME + "_1", VERSION, SCHEMA_URL, ATTRIBUTES))
+        .isNotSameAs(registry.get(NAME, VERSION + "_1", SCHEMA_URL, ATTRIBUTES))
+        .isNotSameAs(registry.get(NAME, VERSION, SCHEMA_URL + "_1", ATTRIBUTES));
+
+    assertThat(registry.get(NAME, VERSION, null, Attributes.empty()))
+        .isNotSameAs(registry.get(NAME, null, null, Attributes.empty()));
+
+    assertThat(registry.get(NAME, null, SCHEMA_URL, Attributes.empty()))
+        .isNotSameAs(registry.get(NAME, null, null, Attributes.empty()));
   }
 
   @Test
-  void getSameInstanceForSameName_WithoutVersion() {
-    assertThat(registry.get(INSTRUMENTATION_NAME)).isSameAs(registry.get(INSTRUMENTATION_NAME));
-    assertThat(registry.get(INSTRUMENTATION_NAME))
-        .isSameAs(registry.get(INSTRUMENTATION_NAME, null));
-  }
+  @SuppressWarnings("ReturnValueIgnored")
+  void getComponents_HighConcurrency() throws ExecutionException, InterruptedException {
+    List<Future<?>> futures = new ArrayList<>();
+    Random random = new Random();
+    int concurrency = 2;
+    ExecutorService executor = Executors.newFixedThreadPool(concurrency);
 
-  @Test
-  void getSameInstanceForSameName_WithVersion() {
-    assertThat(registry.get(INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION))
-        .isSameAs(registry.get(INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION));
-  }
+    try {
+      for (int i = 0; i < 100; i++) {
+        futures.add(
+            executor.submit(
+                () -> {
+                  String name =
+                      IntStream.range(0, 20)
+                          .mapToObj(unused -> String.valueOf((char) random.nextInt(26)))
+                          .collect(joining());
+                  registry.get(name, null, null, Attributes.empty());
+                }));
+        futures.add(
+            executor.submit(() -> registry.getComponents().forEach(TestComponent::hashCode)));
+      }
 
-  @Test
-  void getDifferentInstancesForDifferentNames() {
-    assertThat(registry.get(INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION))
-        .isNotSameAs(registry.get(INSTRUMENTATION_NAME + "_2", INSTRUMENTATION_VERSION));
-  }
-
-  @Test
-  void getDifferentInstancesForDifferentVersions() {
-    assertThat(registry.get(INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION))
-        .isNotSameAs(registry.get(INSTRUMENTATION_NAME, INSTRUMENTATION_VERSION + "_1"));
-  }
-
-  private static final class TestComponent {
-    private final InstrumentationLibraryInfo instrumentationLibraryInfo;
-
-    private TestComponent(InstrumentationLibraryInfo instrumentationLibraryInfo) {
-      this.instrumentationLibraryInfo = instrumentationLibraryInfo;
+      for (Future<?> future : futures) {
+        future.get();
+      }
+    } finally {
+      executor.shutdown();
     }
   }
+
+  private static final class TestComponent {}
 }

@@ -5,12 +5,14 @@
 
 package io.opentelemetry;
 
-import java.util.Arrays;
+import java.util.List;
+import javax.annotation.Nullable;
 
 public final class Request {
-  private String url;
-  private Request[] arguments;
+  @Nullable private String url;
+  @Nullable private List<Request> arguments;
 
+  @Nullable
   public String getUrl() {
     return url;
   }
@@ -19,16 +21,17 @@ public final class Request {
     this.url = url;
   }
 
-  public Request[] getArguments() {
+  @Nullable
+  public List<Request> getArguments() {
     return arguments;
   }
 
-  public void setArguments(Request[] arguments) {
+  public void setArguments(List<Request> arguments) {
     this.arguments = arguments;
   }
 
   @Override
   public String toString() {
-    return "Request{" + "url='" + url + '\'' + ", arguments=" + Arrays.toString(arguments) + '}';
+    return "Request{" + "url='" + url + '\'' + ", arguments=" + arguments + '}';
   }
 }

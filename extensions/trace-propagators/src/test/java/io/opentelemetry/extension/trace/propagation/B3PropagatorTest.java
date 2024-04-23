@@ -7,7 +7,6 @@ package io.opentelemetry.extension.trace.propagation;
 
 import static io.opentelemetry.extension.trace.propagation.B3Propagator.DEBUG_CONTEXT_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.opentelemetry.api.internal.StringUtils;
 import io.opentelemetry.api.trace.Span;
@@ -94,7 +93,7 @@ class B3PropagatorTest {
 
   @Test
   void inject_SampledContext_nullCarrierUsage() {
-    final Map<String, String> carrier = new LinkedHashMap<>();
+    Map<String, String> carrier = new LinkedHashMap<>();
     b3Propagator.inject(
         withSpanContext(
             SpanContext.create(TRACE_ID, SPAN_ID, TraceFlags.getSampled(), TraceState.getDefault()),
@@ -644,7 +643,7 @@ class B3PropagatorTest {
         .isEqualTo(
             SpanContext.createFromRemoteParent(
                 TRACE_ID, SPAN_ID, TraceFlags.getSampled(), TraceState.getDefault()));
-    assertTrue(context.get(DEBUG_CONTEXT_KEY));
+    assertThat(context.get(DEBUG_CONTEXT_KEY)).isTrue();
   }
 
   @Test
@@ -659,7 +658,7 @@ class B3PropagatorTest {
         .isEqualTo(
             SpanContext.createFromRemoteParent(
                 TRACE_ID, SPAN_ID, TraceFlags.getSampled(), TraceState.getDefault()));
-    assertTrue(context.get(DEBUG_CONTEXT_KEY));
+    assertThat(context.get(DEBUG_CONTEXT_KEY)).isTrue();
   }
 
   @Test
@@ -675,7 +674,7 @@ class B3PropagatorTest {
         .isEqualTo(
             SpanContext.createFromRemoteParent(
                 TRACE_ID, SPAN_ID, TraceFlags.getSampled(), TraceState.getDefault()));
-    assertTrue(context.get(DEBUG_CONTEXT_KEY));
+    assertThat(context.get(DEBUG_CONTEXT_KEY)).isTrue();
   }
 
   @Test
@@ -691,7 +690,7 @@ class B3PropagatorTest {
         .isEqualTo(
             SpanContext.createFromRemoteParent(
                 TRACE_ID, SPAN_ID, TraceFlags.getSampled(), TraceState.getDefault()));
-    assertTrue(context.get(DEBUG_CONTEXT_KEY));
+    assertThat(context.get(DEBUG_CONTEXT_KEY)).isTrue();
   }
 
   @Test
@@ -724,5 +723,13 @@ class B3PropagatorTest {
         .containsEntry(
             B3Propagator.COMBINED_HEADER,
             TRACE_ID + "-" + SPAN_ID + "-" + B3Propagator.SINGLE_HEADER_DEBUG);
+  }
+
+  @Test
+  void toString_Valid() {
+    assertThat(b3Propagator.toString())
+        .isEqualTo("B3Propagator{b3PropagatorInjector=B3PropagatorInjectorMultipleHeaders}");
+    assertThat(b3PropagatorSingleHeader.toString())
+        .isEqualTo("B3Propagator{b3PropagatorInjector=B3PropagatorInjectorSingleHeader}");
   }
 }

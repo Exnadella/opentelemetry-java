@@ -9,7 +9,8 @@ import com.google.auto.value.AutoValue;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.internal.InstrumentationScopeUtil;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.sdk.trace.data.LinkData;
@@ -19,19 +20,18 @@ import java.util.List;
 import javax.annotation.concurrent.Immutable;
 
 /**
- * Immutable class that stores {@link SpanData} based on a {@link RecordEventsReadableSpan}.
+ * Immutable class that stores {@link SpanData} based on a {@link SdkSpan}.
  *
- * <p>This class stores a reference to a mutable {@link RecordEventsReadableSpan} ({@code delegate})
- * which it uses only the immutable parts from, and a copy of all the mutable parts.
+ * <p>This class stores a reference to a mutable {@link SdkSpan} ({@code delegate}) which it uses
+ * only the immutable parts from, and a copy of all the mutable parts.
  *
- * <p>When adding a new field to {@link RecordEventsReadableSpan}, store a copy if and only if the
- * field is mutable in the {@link RecordEventsReadableSpan}. Otherwise retrieve it from the
- * referenced {@link RecordEventsReadableSpan}.
+ * <p>When adding a new field to {@link SdkSpan}, store a copy if and only if the field is mutable
+ * in the {@link SdkSpan}. Otherwise retrieve it from the referenced {@link SdkSpan}.
  */
 @Immutable
 @AutoValue
 abstract class SpanWrapper implements SpanData {
-  abstract RecordEventsReadableSpan delegate();
+  abstract SdkSpan delegate();
 
   abstract List<LinkData> resolvedLinks();
 
@@ -42,6 +42,8 @@ abstract class SpanWrapper implements SpanData {
   abstract int totalAttributeCount();
 
   abstract int totalRecordedEvents();
+
+  abstract int totalRecordedLinks();
 
   abstract StatusData status();
 
@@ -56,12 +58,13 @@ abstract class SpanWrapper implements SpanData {
    * preserve the overall immutability of the class.
    */
   static SpanWrapper create(
-      RecordEventsReadableSpan delegate,
+      SdkSpan delegate,
       List<LinkData> links,
       List<EventData> events,
       Attributes attributes,
       int totalAttributeCount,
       int totalRecordedEvents,
+      int totalRecordedLinks,
       StatusData status,
       String name,
       long endEpochNanos,
@@ -73,6 +76,7 @@ abstract class SpanWrapper implements SpanData {
         attributes,
         totalAttributeCount,
         totalRecordedEvents,
+        totalRecordedLinks,
         status,
         name,
         endEpochNanos,
@@ -95,8 +99,15 @@ abstract class SpanWrapper implements SpanData {
   }
 
   @Override
-  public InstrumentationLibraryInfo getInstrumentationLibraryInfo() {
-    return delegate().getInstrumentationLibraryInfo();
+  @Deprecated
+  public io.opentelemetry.sdk.common.InstrumentationLibraryInfo getInstrumentationLibraryInfo() {
+    return InstrumentationScopeUtil.toInstrumentationLibraryInfo(
+        delegate().getInstrumentationScopeInfo());
+  }
+
+  @Override
+  public InstrumentationScopeInfo getInstrumentationScopeInfo() {
+    return delegate().getInstrumentationScopeInfo();
   }
 
   @Override
@@ -151,7 +162,7 @@ abstract class SpanWrapper implements SpanData {
 
   @Override
   public int getTotalRecordedLinks() {
-    return delegate().getTotalRecordedLinks();
+    return totalRecordedLinks();
   }
 
   @Override
@@ -171,8 +182,8 @@ abstract class SpanWrapper implements SpanData {
         + "resource="
         + getResource()
         + ", "
-        + "instrumentationLibraryInfo="
-        + getInstrumentationLibraryInfo()
+        + "instrumentationScopeInfo="
+        + getInstrumentationScopeInfo()
         + ", "
         + "name="
         + getName()

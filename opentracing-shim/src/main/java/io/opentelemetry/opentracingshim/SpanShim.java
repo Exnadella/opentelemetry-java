@@ -10,6 +10,7 @@ import static io.opentelemetry.api.common.AttributeKey.doubleKey;
 import static io.opentelemetry.api.common.AttributeKey.longKey;
 import static io.opentelemetry.api.common.AttributeKey.stringKey;
 
+import io.opentelemetry.api.baggage.Baggage;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.common.AttributesBuilder;
@@ -17,7 +18,6 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.ContextKey;
 import io.opentelemetry.context.ImplicitContextKeyed;
-import io.opentelemetry.semconv.trace.attributes.SemanticAttributes;
 import io.opentracing.Span;
 import io.opentracing.SpanContext;
 import io.opentracing.log.Fields;
@@ -28,30 +28,45 @@ import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 /*
- * SpanContextShim is not directly stored in the SpanShim,
- * as its changes need to be visible in all threads at *any* moment.
- * By default, the related SpanContextShim will not be created
- * in order to avoid overhead (which would require taking a write lock
- * at creation time).
- *
- * Calling context() or setBaggageItem() will effectively force the creation
- * of SpanContextShim object if none existed yet.
+ * SpanContextShim is directly stored in the SpanShim for simplicity
+ * and performance reasons, as opposed to keeping a global map
+ * link OTel's Span and OT Span/SpanContext.
  */
-final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeyed {
+final class SpanShim implements Span, ImplicitContextKeyed {
+
+  private static final AttributeKey<String> EXCEPTION_TYPE =
+      AttributeKey.stringKey("exception.type");
+  private static final AttributeKey<String> EXCEPTION_MESSAGE =
+      AttributeKey.stringKey("exception.message");
+  private static final AttributeKey<String> EXCEPTION_STACKTRACE =
+      AttributeKey.stringKey("exception.stacktrace");
+  private static final String EXCEPTION_EVENT_NAME = "exception";
+
   private static final String DEFAULT_EVENT_NAME = "log";
   private static final String ERROR = "error";
   private static final ContextKey<SpanShim> SPAN_SHIM_KEY =
       ContextKey.named("opentracing-shim-key");
 
   private final io.opentelemetry.api.trace.Span span;
+  private final Object spanContextShimLock;
+  private volatile SpanContextShim spanContextShim;
 
-  public SpanShim(TelemetryInfo telemetryInfo, io.opentelemetry.api.trace.Span span) {
-    super(telemetryInfo);
+  SpanShim(io.opentelemetry.api.trace.Span span) {
+    this(span, Baggage.empty());
+  }
+
+  SpanShim(io.opentelemetry.api.trace.Span span, Baggage baggage) {
     this.span = span;
+    this.spanContextShimLock = new Object();
+    this.spanContextShim = new SpanContextShim(span.getSpanContext(), baggage);
   }
 
   io.opentelemetry.api.trace.Span getSpan() {
     return span;
+  }
+
+  io.opentelemetry.api.baggage.Baggage getBaggage() {
+    return spanContextShim.getBaggage();
   }
 
   @Nullable
@@ -61,38 +76,20 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
 
   @Override
   public Context storeInContext(Context context) {
-    context = context.with(SPAN_SHIM_KEY, this).with(span);
-
-    SpanContextShim spanContextShim = spanContextTable().get(this);
-    if (spanContextShim != null) {
-      context = context.with(spanContextShim.getBaggage());
-    }
+    context = context.with(SPAN_SHIM_KEY, this).with(span).with(spanContextShim.getBaggage());
 
     return context;
   }
 
   @Override
   public SpanContext context() {
-    /* Read the value using the read lock first. */
-    SpanContextShim contextShim = spanContextTable().get(this);
-
-    /* Switch to the write lock *only* for the relatively exceptional case
-     * of no context being created.
-     * (as we cannot upgrade read->write lock sadly).*/
-    if (contextShim == null) {
-      contextShim = spanContextTable().create(this);
-    }
-
-    return contextShim;
+    return spanContextShim;
   }
 
   @Override
   public Span setTag(String key, String value) {
-    if (Tags.SPAN_KIND.getKey().equals(key)) {
-      // TODO: confirm we can safely ignore span.kind after Span was created
-      // https://github.com/bogdandrutu/opentelemetry/issues/42
-    } else if (Tags.ERROR.getKey().equals(key)) {
-      StatusCode canonicalCode = Boolean.parseBoolean(value) ? StatusCode.ERROR : StatusCode.UNSET;
+    if (Tags.ERROR.getKey().equals(key)) {
+      StatusCode canonicalCode = Boolean.parseBoolean(value) ? StatusCode.ERROR : StatusCode.OK;
       span.setStatus(canonicalCode);
     } else {
       span.setAttribute(key, value);
@@ -104,7 +101,7 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
   @Override
   public Span setTag(String key, boolean value) {
     if (Tags.ERROR.getKey().equals(key)) {
-      StatusCode canonicalCode = value ? StatusCode.ERROR : StatusCode.UNSET;
+      StatusCode canonicalCode = value ? StatusCode.ERROR : StatusCode.OK;
       span.setStatus(canonicalCode);
     } else {
       span.setAttribute(key, value);
@@ -118,7 +115,7 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
     if (value == null) {
       return this;
     }
-    // TODO - Verify only the 'basic' types are supported/used.
+
     if (value instanceof Integer
         || value instanceof Long
         || value instanceof Short
@@ -127,7 +124,7 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
     } else if (value instanceof Float || value instanceof Double) {
       span.setAttribute(key, value.doubleValue());
     } else {
-      throw new IllegalArgumentException("Number type not supported");
+      span.setAttribute(key, value.toString());
     }
 
     return this;
@@ -173,7 +170,9 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
       return this;
     }
 
-    spanContextTable().setBaggageItem(this, key, value);
+    synchronized (spanContextShimLock) {
+      spanContextShim = spanContextShim.newWithKeyValue(key, value);
+    }
 
     return this;
   }
@@ -185,7 +184,7 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
       return null;
     }
 
-    return spanContextTable().getBaggageItem(this, key);
+    return spanContextShim.getBaggageItem(key);
   }
 
   @Override
@@ -212,7 +211,7 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
       throwable = findThrowable(fields);
       isError = true;
       if (throwable == null) {
-        name = SemanticAttributes.EXCEPTION_EVENT_NAME;
+        name = EXCEPTION_EVENT_NAME;
       }
     }
     Attributes attributes = convertToAttributes(fields, isError, throwable != null);
@@ -262,11 +261,11 @@ final class SpanShim extends BaseShimObject implements Span, ImplicitContextKeye
         AttributeKey<String> attributeKey = null;
         if (isError && !isRecordingException) {
           if (key.equals(Fields.ERROR_KIND)) {
-            attributeKey = SemanticAttributes.EXCEPTION_TYPE;
+            attributeKey = EXCEPTION_TYPE;
           } else if (key.equals(Fields.MESSAGE)) {
-            attributeKey = SemanticAttributes.EXCEPTION_MESSAGE;
+            attributeKey = EXCEPTION_MESSAGE;
           } else if (key.equals(Fields.STACK)) {
-            attributeKey = SemanticAttributes.EXCEPTION_STACKTRACE;
+            attributeKey = EXCEPTION_STACKTRACE;
           }
         }
         if (isRecordingException && key.equals(Fields.ERROR_OBJECT)) {

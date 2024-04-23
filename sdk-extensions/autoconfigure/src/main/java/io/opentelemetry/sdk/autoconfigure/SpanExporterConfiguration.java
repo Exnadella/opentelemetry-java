@@ -5,152 +5,104 @@
 
 package io.opentelemetry.sdk.autoconfigure;
 
-import io.opentelemetry.exporter.jaeger.JaegerGrpcSpanExporter;
-import io.opentelemetry.exporter.jaeger.JaegerGrpcSpanExporterBuilder;
-import io.opentelemetry.exporter.logging.LoggingSpanExporter;
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporterBuilder;
-import io.opentelemetry.exporter.zipkin.ZipkinSpanExporter;
-import io.opentelemetry.exporter.zipkin.ZipkinSpanExporterBuilder;
-import io.opentelemetry.sdk.autoconfigure.spi.ConfigurableSpanExporterProvider;
+import io.opentelemetry.sdk.autoconfigure.internal.NamedSpiManager;
+import io.opentelemetry.sdk.autoconfigure.internal.SpiHelper;
+import io.opentelemetry.sdk.autoconfigure.spi.ConfigProperties;
+import io.opentelemetry.sdk.autoconfigure.spi.ConfigurationException;
+import io.opentelemetry.sdk.autoconfigure.spi.internal.DefaultConfigProperties;
+import io.opentelemetry.sdk.autoconfigure.spi.traces.ConfigurableSpanExporterProvider;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.Duration;
+import java.io.Closeable;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.ServiceLoader;
-import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
-import javax.annotation.Nullable;
+import java.util.Set;
+import java.util.function.BiFunction;
 
 final class SpanExporterConfiguration {
 
-  @Nullable
-  static SpanExporter configureExporter(String name, ConfigProperties config) {
-    Map<String, SpanExporter> spiExporters =
-        StreamSupport.stream(
-                ServiceLoader.load(ConfigurableSpanExporterProvider.class).spliterator(), false)
-            .collect(
-                Collectors.toMap(
-                    ConfigurableSpanExporterProvider::getName,
-                    configurableSpanExporterProvider ->
-                        configurableSpanExporterProvider.createExporter(config)));
+  private static final String EXPORTER_NONE = "none";
+  private static final Map<String, String> EXPORTER_ARTIFACT_ID_BY_NAME;
 
-    switch (name) {
-      case "otlp":
-        return configureOtlpSpans(config);
-      case "jaeger":
-        return configureJaeger(config);
-      case "zipkin":
-        return configureZipkin(config);
-      case "logging":
-        ClasspathUtil.checkClassExists(
-            "io.opentelemetry.exporter.logging.LoggingSpanExporter",
-            "Logging Trace Exporter",
-            "opentelemetry-exporter-logging");
-        return new LoggingSpanExporter();
-      case "none":
-        return null;
-      default:
-        SpanExporter spiExporter = spiExporters.get(name);
-        if (spiExporter == null) {
-          throw new ConfigurationException("Unrecognized value for otel.traces.exporter: " + name);
-        }
-        return spiExporter;
-    }
+  static {
+    EXPORTER_ARTIFACT_ID_BY_NAME = new HashMap<>();
+    EXPORTER_ARTIFACT_ID_BY_NAME.put("console", "opentelemetry-exporter-logging");
+    EXPORTER_ARTIFACT_ID_BY_NAME.put("jaeger", "opentelemetry-exporter-jaeger");
+    EXPORTER_ARTIFACT_ID_BY_NAME.put("logging", "opentelemetry-exporter-logging");
+    EXPORTER_ARTIFACT_ID_BY_NAME.put("logging-otlp", "opentelemetry-exporter-logging-otlp");
+    EXPORTER_ARTIFACT_ID_BY_NAME.put("otlp", "opentelemetry-exporter-otlp");
+    EXPORTER_ARTIFACT_ID_BY_NAME.put("zipkin", "opentelemetry-exporter-zipkin");
   }
 
   // Visible for testing
-  static OtlpGrpcSpanExporter configureOtlpSpans(ConfigProperties config) {
-    ClasspathUtil.checkClassExists(
-        "io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter",
-        "OTLP Trace Exporter",
-        "opentelemetry-exporter-otlp");
-    OtlpGrpcSpanExporterBuilder builder = OtlpGrpcSpanExporter.builder();
-
-    String endpoint = config.getString("otel.exporter.otlp.traces.endpoint");
-    if (endpoint == null) {
-      endpoint = config.getString("otel.exporter.otlp.endpoint");
-    }
-    if (endpoint != null) {
-      builder.setEndpoint(endpoint);
-    }
-
-    Map<String, String> headers = config.getCommaSeparatedMap("otel.exporter.otlp.traces.headers");
-    if (headers.isEmpty()) {
-      headers = config.getCommaSeparatedMap("otel.exporter.otlp.headers");
-    }
-    headers.forEach(builder::addHeader);
-
-    Duration timeout = config.getDuration("otel.exporter.otlp.traces.timeout");
-    if (timeout == null) {
-      timeout = config.getDuration("otel.exporter.otlp.timeout");
-    }
-    if (timeout != null) {
-      builder.setTimeout(timeout);
-    }
-
-    String certificate = config.getString("otel.exporter.otlp.traces.certificate");
-    if (certificate == null) {
-      certificate = config.getString("otel.exporter.otlp.certificate");
-    }
-    if (certificate != null) {
-      Path path = Paths.get(certificate);
-      if (!Files.exists(path)) {
-        throw new ConfigurationException("Invalid OTLP certificate path: " + path);
+  static Map<String, SpanExporter> configureSpanExporters(
+      ConfigProperties config,
+      SpiHelper spiHelper,
+      BiFunction<? super SpanExporter, ConfigProperties, ? extends SpanExporter>
+          spanExporterCustomizer,
+      List<Closeable> closeables) {
+    Set<String> exporterNames = DefaultConfigProperties.getSet(config, "otel.traces.exporter");
+    if (exporterNames.contains(EXPORTER_NONE)) {
+      if (exporterNames.size() > 1) {
+        throw new ConfigurationException(
+            "otel.traces.exporter contains " + EXPORTER_NONE + " along with other exporters");
       }
-      final byte[] certificateBytes;
-      try {
-        certificateBytes = Files.readAllBytes(path);
-      } catch (IOException e) {
-        throw new ConfigurationException("Error reading OTLP certificate.", e);
+      SpanExporter noop = SpanExporter.composite();
+      SpanExporter customized = spanExporterCustomizer.apply(noop, config);
+      if (customized == noop) {
+        return Collections.emptyMap();
       }
-      builder.setTrustedCertificates(certificateBytes);
+      closeables.add(customized);
+      return Collections.singletonMap(EXPORTER_NONE, customized);
     }
 
-    return builder.build();
+    if (exporterNames.isEmpty()) {
+      exporterNames = Collections.singleton("otlp");
+    }
+
+    NamedSpiManager<SpanExporter> spiExportersManager = spanExporterSpiManager(config, spiHelper);
+
+    Map<String, SpanExporter> map = new HashMap<>();
+    for (String exporterName : exporterNames) {
+      SpanExporter spanExporter = configureExporter(exporterName, spiExportersManager);
+      closeables.add(spanExporter);
+      SpanExporter customizedSpanExporter = spanExporterCustomizer.apply(spanExporter, config);
+      if (customizedSpanExporter != spanExporter) {
+        closeables.add(customizedSpanExporter);
+      }
+      map.put(exporterName, customizedSpanExporter);
+    }
+    return Collections.unmodifiableMap(map);
   }
 
-  private static SpanExporter configureJaeger(ConfigProperties config) {
-    ClasspathUtil.checkClassExists(
-        "io.opentelemetry.exporter.jaeger.JaegerGrpcSpanExporter",
-        "Jaeger gRPC Exporter",
-        "opentelemetry-exporter-jaeger");
-    JaegerGrpcSpanExporterBuilder builder = JaegerGrpcSpanExporter.builder();
-
-    String endpoint = config.getString("otel.exporter.jaeger.endpoint");
-    if (endpoint != null) {
-      builder.setEndpoint(endpoint);
-    }
-
-    Duration timeout = config.getDuration("otel.exporter.jaeger.timeout");
-    if (timeout != null) {
-      builder.setTimeout(timeout);
-    }
-
-    return builder.build();
+  // Visible for testing
+  static NamedSpiManager<SpanExporter> spanExporterSpiManager(
+      ConfigProperties config, SpiHelper spiHelper) {
+    return spiHelper.loadConfigurable(
+        ConfigurableSpanExporterProvider.class,
+        ConfigurableSpanExporterProvider::getName,
+        ConfigurableSpanExporterProvider::createExporter,
+        config);
   }
 
-  private static SpanExporter configureZipkin(ConfigProperties config) {
-    ClasspathUtil.checkClassExists(
-        "io.opentelemetry.exporter.zipkin.ZipkinSpanExporter",
-        "Zipkin Exporter",
-        "opentelemetry-exporter-zipkin");
-    ZipkinSpanExporterBuilder builder = ZipkinSpanExporter.builder();
-
-    String endpoint = config.getString("otel.exporter.zipkin.endpoint");
-    if (endpoint != null) {
-      builder.setEndpoint(endpoint);
+  // Visible for testing
+  static SpanExporter configureExporter(
+      String name, NamedSpiManager<SpanExporter> spiExportersManager) {
+    SpanExporter spiExporter = spiExportersManager.getByName(name);
+    if (spiExporter == null) {
+      String artifactId = EXPORTER_ARTIFACT_ID_BY_NAME.get(name);
+      if (artifactId != null) {
+        throw new ConfigurationException(
+            "otel.traces.exporter set to \""
+                + name
+                + "\" but "
+                + artifactId
+                + " not found on classpath. Make sure to add it as a dependency.");
+      }
+      throw new ConfigurationException("Unrecognized value for otel.traces.exporter: " + name);
     }
-
-    Duration timeout = config.getDuration("otel.exporter.zipkin.timeout");
-    if (timeout != null) {
-      builder.setReadTimeout(timeout);
-    }
-
-    return builder.build();
+    return spiExporter;
   }
 
   private SpanExporterConfiguration() {}

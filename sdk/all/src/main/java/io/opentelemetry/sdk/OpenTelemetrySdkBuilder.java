@@ -7,15 +7,20 @@ package io.opentelemetry.sdk;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.context.propagation.ContextPropagators;
-import io.opentelemetry.sdk.OpenTelemetrySdk.ObfuscatedTracerProvider;
+import io.opentelemetry.sdk.logs.SdkLoggerProvider;
+import io.opentelemetry.sdk.logs.SdkLoggerProviderBuilder;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProviderBuilder;
+import javax.annotation.Nullable;
 
 /** A builder for configuring an {@link OpenTelemetrySdk}. */
 public final class OpenTelemetrySdkBuilder {
 
   private ContextPropagators propagators = ContextPropagators.noop();
-  private SdkTracerProvider tracerProvider;
+  @Nullable private SdkTracerProvider tracerProvider;
+  @Nullable private SdkMeterProvider meterProvider;
+  @Nullable private SdkLoggerProvider loggerProvider;
 
   /**
    * Package protected to disallow direct initialization.
@@ -28,16 +33,34 @@ public final class OpenTelemetrySdkBuilder {
    * Sets the {@link SdkTracerProvider} to use. This can be used to configure tracing settings by
    * returning the instance created by a {@link SdkTracerProviderBuilder}.
    *
-   * <p>If you use this method, it is assumed that you are providing a fully configured
-   * TracerSdkProvider, and other settings will be ignored.
-   *
-   * <p>Note: the parameter passed in here must be a {@link SdkTracerProvider} instance.
-   *
-   * @param tracerProvider A {@link SdkTracerProvider} to use with this instance.
    * @see SdkTracerProvider#builder()
    */
   public OpenTelemetrySdkBuilder setTracerProvider(SdkTracerProvider tracerProvider) {
     this.tracerProvider = tracerProvider;
+    return this;
+  }
+
+  /**
+   * Sets the {@link SdkMeterProvider} to use. This can be used to configure metric settings by
+   * returning the instance created by a {@link
+   * io.opentelemetry.sdk.metrics.SdkMeterProviderBuilder}.
+   *
+   * @see SdkMeterProvider#builder()
+   */
+  public OpenTelemetrySdkBuilder setMeterProvider(SdkMeterProvider meterProvider) {
+    this.meterProvider = meterProvider;
+    return this;
+  }
+
+  /**
+   * Sets the {@link SdkLoggerProvider} to use. This can be used to configure log settings by
+   * returning the instance created by a {@link SdkLoggerProviderBuilder}.
+   *
+   * @see SdkLoggerProvider#builder()
+   * @since 1.19.0
+   */
+  public OpenTelemetrySdkBuilder setLoggerProvider(SdkLoggerProvider loggerProvider) {
+    this.loggerProvider = loggerProvider;
     return this;
   }
 
@@ -73,10 +96,21 @@ public final class OpenTelemetrySdkBuilder {
    * @see GlobalOpenTelemetry
    */
   public OpenTelemetrySdk build() {
+    SdkTracerProvider tracerProvider = this.tracerProvider;
     if (tracerProvider == null) {
       tracerProvider = SdkTracerProvider.builder().build();
     }
 
-    return new OpenTelemetrySdk(new ObfuscatedTracerProvider(tracerProvider), propagators);
+    SdkMeterProvider meterProvider = this.meterProvider;
+    if (meterProvider == null) {
+      meterProvider = SdkMeterProvider.builder().build();
+    }
+
+    SdkLoggerProvider loggerProvider = this.loggerProvider;
+    if (loggerProvider == null) {
+      loggerProvider = SdkLoggerProvider.builder().build();
+    }
+
+    return new OpenTelemetrySdk(tracerProvider, meterProvider, loggerProvider, propagators);
   }
 }

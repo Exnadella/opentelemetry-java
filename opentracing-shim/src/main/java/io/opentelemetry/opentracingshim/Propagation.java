@@ -16,12 +16,16 @@ import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
 
-final class Propagation extends BaseShimObject {
+final class Propagation {
   private static final TextMapSetter SETTER_INSTANCE = new TextMapSetter();
   private static final TextMapGetter GETTER_INSTANCE = new TextMapGetter();
 
-  Propagation(TelemetryInfo telemetryInfo) {
-    super(telemetryInfo);
+  private final TextMapPropagator textMapPropagator;
+  private final TextMapPropagator httpPropagator;
+
+  Propagation(TextMapPropagator textMapPropagator, TextMapPropagator httpPropagator) {
+    this.textMapPropagator = textMapPropagator;
+    this.httpPropagator = httpPropagator;
   }
 
   <C> void injectTextMap(SpanContextShim contextShim, Format<C> format, TextMapInject carrier) {
@@ -41,18 +45,20 @@ final class Propagation extends BaseShimObject {
     Context context = getPropagator(format).extract(Context.current(), carrierMap, GETTER_INSTANCE);
 
     Span span = Span.fromContext(context);
-    if (!span.getSpanContext().isValid()) {
+    Baggage baggage = Baggage.fromContext(context);
+    if (!span.getSpanContext().isValid() && baggage.isEmpty()) {
       return null;
     }
 
-    return new SpanContextShim(telemetryInfo, span.getSpanContext(), Baggage.fromContext(context));
+    return new SpanContextShim(span.getSpanContext(), baggage);
   }
 
-  private <C> TextMapPropagator getPropagator(Format<C> format) {
+  // Visible for testing
+  <C> TextMapPropagator getPropagator(Format<C> format) {
     if (format == Format.Builtin.HTTP_HEADERS) {
-      return propagators().httpHeadersPropagator();
+      return httpPropagator;
     }
-    return propagators().textMapPropagator();
+    return textMapPropagator;
   }
 
   static final class TextMapSetter

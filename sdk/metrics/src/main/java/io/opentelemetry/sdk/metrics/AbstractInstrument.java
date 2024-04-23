@@ -5,9 +5,10 @@
 
 package io.opentelemetry.sdk.metrics;
 
-import io.opentelemetry.sdk.metrics.common.InstrumentDescriptor;
+import io.opentelemetry.sdk.metrics.internal.descriptor.InstrumentDescriptor;
+import javax.annotation.Nullable;
 
-abstract class AbstractInstrument implements Instrument {
+abstract class AbstractInstrument {
 
   private final InstrumentDescriptor descriptor;
 
@@ -21,7 +22,7 @@ abstract class AbstractInstrument implements Instrument {
   }
 
   @Override
-  public boolean equals(Object o) {
+  public boolean equals(@Nullable Object o) {
     if (this == o) {
       return true;
     }
@@ -37,5 +38,10 @@ abstract class AbstractInstrument implements Instrument {
   @Override
   public int hashCode() {
     return descriptor.hashCode();
+  }
+
+  @Override
+  public String toString() {
+    return this.getClass().getSimpleName() + "{" + "descriptor=" + getDescriptor() + '}';
   }
 }

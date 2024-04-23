@@ -12,8 +12,10 @@ import io.opencensus.implcore.trace.internal.RandomHandler;
 import io.opencensus.trace.TraceComponent;
 import io.opencensus.trace.Tracer;
 import io.opencensus.trace.config.TraceConfig;
+import io.opencensus.trace.config.TraceParams;
 import io.opencensus.trace.export.ExportComponent;
 import io.opencensus.trace.propagation.PropagationComponent;
+import io.opencensus.trace.samplers.Samplers;
 
 /**
  * Implementation of the {@link TraceComponent} for OpenTelemetry migration, which uses the
@@ -25,10 +27,10 @@ public final class OpenTelemetryTraceComponentImpl extends TraceComponent {
       new OpenTelemetryPropagationComponentImpl();
   private final ExportComponent noopExportComponent = ExportComponent.newNoopExportComponent();
   private final Clock clock;
-  private final TraceConfig traceConfig = new TraceConfigImpl();
+  private final TraceConfig traceConfig = makeTraceConfig();
   private final Tracer tracer;
 
-  /** Public constructor to be used with reflection loading. */
+  @SuppressWarnings("unused") // Loaded via reflection
   public OpenTelemetryTraceComponentImpl() {
     clock = MillisClock.getInstance();
     RandomHandler randomHandler = new ThreadLocalRandomHandler();
@@ -46,7 +48,7 @@ public final class OpenTelemetryTraceComponentImpl extends TraceComponent {
   }
 
   @Override
-  public final Clock getClock() {
+  public Clock getClock() {
     return clock;
   }
 
@@ -58,6 +60,15 @@ public final class OpenTelemetryTraceComponentImpl extends TraceComponent {
 
   @Override
   public TraceConfig getTraceConfig() {
+    return traceConfig;
+  }
+
+  private static TraceConfig makeTraceConfig() {
+    // Use the default TraceParams except use an always-on sampler. This defers the
+    // sampling decision to OpenTelemetry
+    TraceConfig traceConfig = new TraceConfigImpl();
+    traceConfig.updateActiveTraceParams(
+        TraceParams.DEFAULT.toBuilder().setSampler(Samplers.alwaysSample()).build());
     return traceConfig;
   }
 }

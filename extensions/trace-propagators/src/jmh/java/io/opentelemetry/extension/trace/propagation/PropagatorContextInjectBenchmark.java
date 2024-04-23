@@ -11,7 +11,6 @@ import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.TextMapSetter;
-import io.opentelemetry.extension.aws.AwsXrayPropagator;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -83,13 +82,7 @@ public class PropagatorContextInjectBenchmark {
   public static class JaegerContextInjectBenchmark extends AbstractContextInjectBenchmark {
 
     private final JaegerPropagator jaegerPropagator = JaegerPropagator.getInstance();
-    private final TextMapSetter<Map<String, String>> setter =
-        new TextMapSetter<Map<String, String>>() {
-          @Override
-          public void set(Map<String, String> carrier, String key, String value) {
-            carrier.put(key, value);
-          }
-        };
+    private final TextMapSetter<Map<String, String>> setter = Map::put;
 
     @Override
     protected void doInject(Context context, Map<String, String> carrier) {
@@ -101,13 +94,7 @@ public class PropagatorContextInjectBenchmark {
   public static class B3SingleHeaderContextInjectBenchmark extends AbstractContextInjectBenchmark {
 
     private final B3Propagator b3Propagator = B3Propagator.injectingSingleHeader();
-    private final TextMapSetter<Map<String, String>> setter =
-        new TextMapSetter<Map<String, String>>() {
-          @Override
-          public void set(Map<String, String> carrier, String key, String value) {
-            carrier.put(key, value);
-          }
-        };
+    private final TextMapSetter<Map<String, String>> setter = Map::put;
 
     @Override
     protected void doInject(Context context, Map<String, String> carrier) {
@@ -120,34 +107,11 @@ public class PropagatorContextInjectBenchmark {
       extends AbstractContextInjectBenchmark {
 
     private final B3Propagator b3Propagator = B3Propagator.injectingMultiHeaders();
-    private final TextMapSetter<Map<String, String>> setter =
-        new TextMapSetter<Map<String, String>>() {
-          @Override
-          public void set(Map<String, String> carrier, String key, String value) {
-            carrier.put(key, value);
-          }
-        };
+    private final TextMapSetter<Map<String, String>> setter = Map::put;
 
     @Override
     protected void doInject(Context context, Map<String, String> carrier) {
       b3Propagator.inject(context, carrier, setter);
-    }
-  }
-
-  /** Benchmark for injecting trace context into AWS X-Ray headers. */
-  public static class AwsXrayPropagatorInjectBenchmark extends AbstractContextInjectBenchmark {
-    private final AwsXrayPropagator xrayPropagator = AwsXrayPropagator.getInstance();
-    private final TextMapSetter<Map<String, String>> setter =
-        new TextMapSetter<Map<String, String>>() {
-          @Override
-          public void set(Map<String, String> carrier, String key, String value) {
-            carrier.put(key, value);
-          }
-        };
-
-    @Override
-    protected void doInject(Context context, Map<String, String> carrier) {
-      xrayPropagator.inject(context, carrier, setter);
     }
   }
 }

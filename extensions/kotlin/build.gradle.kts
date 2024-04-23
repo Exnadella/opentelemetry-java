@@ -6,16 +6,11 @@ plugins {
 
   id("otel.jmh-conventions")
   id("org.jetbrains.kotlin.jvm")
-  id("org.unbroken-dome.test-sets")
   id("otel.animalsniffer-conventions")
 }
 
 description = "OpenTelemetry Kotlin Extensions"
 otelJava.moduleName.set("io.opentelemetry.extension.kotlin")
-
-testSets {
-  create("testStrictContext")
-}
 
 dependencies {
   implementation(platform("org.jetbrains.kotlin:kotlin-bom"))
@@ -23,17 +18,37 @@ dependencies {
   api(project(":api:all"))
 
   compileOnly("org.jetbrains.kotlin:kotlin-stdlib-common")
-  compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.4.2")
+  compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.2")
 
   testImplementation(project(":sdk:testing"))
   testImplementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
-  testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.4.2")
+  testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.2")
+}
+
+testing {
+  suites {
+    register<JvmTestSuite>("testStrictContext") {
+      dependencies {
+        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.2")
+      }
+
+      targets {
+        all {
+          testTask.configure {
+            jvmArgs("-Dio.opentelemetry.context.enableStrictContext=true")
+          }
+        }
+      }
+    }
+  }
 }
 
 tasks {
   withType(KotlinCompile::class) {
     kotlinOptions {
       jvmTarget = "1.8"
+      languageVersion = "1.6"
     }
   }
 
@@ -42,7 +57,7 @@ tasks {
     enabled = false
   }
 
-  named<Test>("testStrictContext") {
-    jvmArgs("-Dio.opentelemetry.context.enableStrictContext=true")
+  check {
+    dependsOn(testing.suites)
   }
 }

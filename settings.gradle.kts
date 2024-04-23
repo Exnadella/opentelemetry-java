@@ -1,24 +1,22 @@
 pluginManagement {
   plugins {
-    id("com.github.ben-manes.versions") version "0.39.0"
-    id("com.github.johnrengelman.shadow") version "7.0.0"
-    id("com.gradle.enterprise") version "3.6"
-    id("de.undercouch.download") version "4.1.1"
-    id("io.github.gradle-nexus.publish-plugin") version "1.1.0"
-    id("nebula.release") version "15.3.1"
-    id("org.checkerframework") version "0.5.20"
-    id("org.jetbrains.kotlin.jvm") version "1.5.10"
-    id("org.unbroken-dome.test-sets") version "4.0.0"
+    id("com.github.johnrengelman.shadow") version "8.1.1"
+    id("com.gradle.develocity") version "3.17.2"
+    id("de.undercouch.download") version "5.6.0"
+    id("org.jsonschema2pojo") version "1.2.1"
+    id("io.github.gradle-nexus.publish-plugin") version "2.0.0"
+    id("org.graalvm.buildtools.native") version "0.10.1"
   }
 }
 
 plugins {
-  id("com.gradle.enterprise")
+  id("com.gradle.develocity")
 }
 
 dependencyResolutionManagement {
   repositories {
     mavenCentral()
+    google()
     mavenLocal()
   }
 }
@@ -26,62 +24,80 @@ dependencyResolutionManagement {
 rootProject.name = "opentelemetry-java"
 include(":all")
 include(":api:all")
-include(":api:metrics")
-include(":semconv")
+include(":api:incubator")
 include(":bom")
 include(":bom-alpha")
 include(":context")
 include(":dependencyManagement")
-include(":extensions:annotations")
-include(":extensions:incubator")
-include(":extensions:aws")
 include(":extensions:kotlin")
-include(":extensions:noop-api")
 include(":extensions:trace-propagators")
-include(":exporters:jaeger")
-include(":exporters:jaeger-thrift")
+include(":exporters:common")
+include(":exporters:sender:grpc-managed-channel")
+include(":exporters:sender:jdk")
+include(":exporters:sender:okhttp")
 include(":exporters:logging")
 include(":exporters:logging-otlp")
 include(":exporters:otlp:all")
 include(":exporters:otlp:common")
-include(":exporters:otlp:metrics")
-include(":exporters:otlp:trace")
-include(":exporters:otlp-http:metrics")
-include(":exporters:otlp-http:trace")
+include(":exporters:otlp:testing-internal")
 include(":exporters:prometheus")
 include(":exporters:zipkin")
 include(":integration-tests")
+include(":integration-tests:otlp")
 include(":integration-tests:tracecontext")
+include(":integration-tests:graal")
 include(":opencensus-shim")
 include(":opentracing-shim")
 include(":perf-harness")
-include(":proto")
 include(":sdk:all")
 include(":sdk:common")
+include(":sdk:logs")
 include(":sdk:metrics")
-include(":sdk:metrics-testing")
 include(":sdk:testing")
 include(":sdk:trace")
 include(":sdk:trace-shaded-deps")
-include(":sdk-extensions:async-processor")
 include(":sdk-extensions:autoconfigure")
-include(":sdk-extensions:aws")
-include(":sdk-extensions:logging")
-include(":sdk-extensions:resources")
-include(":sdk-extensions:tracing-incubator")
+include(":sdk-extensions:autoconfigure-spi")
+include(":sdk-extensions:incubator")
 include(":sdk-extensions:jaeger-remote-sampler")
-include(":sdk-extensions:jfr-events")
-include(":sdk-extensions:zpages")
+include(":testing-internal")
+include(":animal-sniffer-signature")
 
+val gradleEnterpriseServer = "https://ge.opentelemetry.io"
 val isCI = System.getenv("CI") != null
-gradleEnterprise {
-  buildScan {
-    termsOfServiceUrl = "https://gradle.com/terms-of-service"
-    termsOfServiceAgree = "yes"
+val geAccessKey = System.getenv("GRADLE_ENTERPRISE_ACCESS_KEY") ?: ""
 
-    if (isCI) {
-      publishAlways()
-      tag("CI")
+// if GE access key is not given and we are in CI, then we publish to scans.gradle.com
+val useScansGradleCom = isCI && geAccessKey.isEmpty()
+
+if (useScansGradleCom) {
+  develocity {
+    buildScan {
+      termsOfUseUrl.set("https://gradle.com/terms-of-service")
+      termsOfUseAgree.set("yes")
+      uploadInBackground.set(!isCI)
+      publishing.onlyIf { true }
+
+      capture {
+        fileFingerprints.set(true)
+      }
+    }
+  }
+} else {
+  develocity {
+    server = gradleEnterpriseServer
+    buildScan {
+      uploadInBackground.set(!isCI)
+      publishing.onlyIf {
+        it.isAuthenticated
+      }
+
+      capture {
+        fileFingerprints.set(true)
+      }
+
+      gradle.startParameter.projectProperties["testJavaVersion"]?.let { tag(it) }
+      gradle.startParameter.projectProperties["testJavaVM"]?.let { tag(it) }
     }
   }
 }

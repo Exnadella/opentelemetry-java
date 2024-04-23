@@ -11,45 +11,43 @@ import io.opentracing.ScopeManager;
 import io.opentracing.Span;
 import javax.annotation.Nullable;
 
-final class ScopeManagerShim extends BaseShimObject implements ScopeManager {
-  public ScopeManagerShim(TelemetryInfo telemetryInfo) {
-    super(telemetryInfo);
-  }
+final class ScopeManagerShim implements ScopeManager {
+  private static final SpanShim NOOP_SPANSHIM =
+      new SpanShim(io.opentelemetry.api.trace.Span.getInvalid());
+
+  ScopeManagerShim() {}
 
   @Override
   @Nullable
   public Span activeSpan() {
     SpanShim spanShim = SpanShim.current();
-    io.opentelemetry.api.trace.Span span = null;
-    if (spanShim == null) {
-      span = io.opentelemetry.api.trace.Span.current();
-    } else {
-      span = spanShim.getSpan();
-    }
+    io.opentelemetry.api.trace.Span span = io.opentelemetry.api.trace.Span.current();
+    io.opentelemetry.api.baggage.Baggage baggage = io.opentelemetry.api.baggage.Baggage.current();
 
-    // As OpenTracing simply returns null when no active instance is available,
-    // we need to do map an invalid OpenTelemetry span to null here.
     if (!span.getSpanContext().isValid()) {
-      return null;
+      if (baggage.isEmpty()) {
+        return null;
+      }
+
+      return new SpanShim(io.opentelemetry.api.trace.Span.getInvalid(), baggage);
     }
 
     // If there's a SpanShim for the *actual* active Span, simply return it.
-    if (spanShim != null && span == io.opentelemetry.api.trace.Span.current()) {
+    if (spanShim != null && spanShim.getSpan() == span) {
       return spanShim;
     }
 
     // Span was activated from outside the Shim layer unfortunately.
-    return new SpanShim(telemetryInfo(), span);
+    return new SpanShim(span, baggage);
   }
 
   @Override
   @SuppressWarnings("MustBeClosedChecker")
-  public Scope activate(Span span) {
-    if (!(span instanceof SpanShim)) {
-      throw new IllegalArgumentException("span is not a valid SpanShim object");
+  public Scope activate(@Nullable Span span) {
+    SpanShim spanShim = ShimUtil.getSpanShim(span);
+    if (spanShim == null) {
+      return new ScopeShim(Context.current().with(NOOP_SPANSHIM).makeCurrent());
     }
-
-    SpanShim spanShim = (SpanShim) span;
     return new ScopeShim(Context.current().with(spanShim).makeCurrent());
   }
 }

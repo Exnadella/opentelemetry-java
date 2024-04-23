@@ -5,12 +5,13 @@
 
 package io.opentelemetry.perf;
 
+import static io.opentelemetry.api.common.AttributeKey.stringKey;
+
 import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.ToxiproxyClient;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
 import eu.rekawek.toxiproxy.model.ToxicList;
 import eu.rekawek.toxiproxy.model.toxic.Timeout;
-import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
@@ -21,14 +22,13 @@ import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.metrics.data.LongPointData;
 import io.opentelemetry.sdk.metrics.data.MetricData;
 import io.opentelemetry.sdk.metrics.data.PointData;
-import io.opentelemetry.sdk.metrics.export.IntervalMetricReader;
-import io.opentelemetry.sdk.metrics.testing.InMemoryMetricExporter;
+import io.opentelemetry.sdk.metrics.export.PeriodicMetricReader;
 import io.opentelemetry.sdk.resources.Resource;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
-import io.opentelemetry.semconv.resource.attributes.ResourceAttributes;
 import java.io.IOException;
-import java.util.Collections;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -48,6 +48,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
+import org.testcontainers.images.PullPolicy;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -60,16 +61,16 @@ public class OtlpPipelineStressTest {
   public static final int OTLP_RECEIVER_PORT = 4317;
   public static final int COLLECTOR_PROXY_PORT = 44444;
   public static final int TOXIPROXY_CONTROL_PORT = 8474;
-  public static Network network = Network.newNetwork();
-  public static AtomicLong totalSpansReceivedByCollector = new AtomicLong();
+  public static final Network network = Network.newNetwork();
+  public static final AtomicLong totalSpansReceivedByCollector = new AtomicLong();
 
   private static final Logger logger = LoggerFactory.getLogger(OtlpPipelineStressTest.class);
 
   @Container
-  public static GenericContainer<?> collectorContainer =
+  public static final GenericContainer<?> collectorContainer =
       new GenericContainer<>(
-              DockerImageName.parse(
-                  "ghcr.io/open-telemetry/java-test-containers:otel-collector-dev"))
+              DockerImageName.parse("ghcr.io/open-telemetry/opentelemetry-java/otel-collector"))
+          .withImagePullPolicy(PullPolicy.alwaysPull())
           .withNetwork(network)
           .withNetworkAliases("otel-collector")
           .withExposedPorts(OTLP_RECEIVER_PORT)
@@ -92,9 +93,10 @@ public class OtlpPipelineStressTest {
           .waitingFor(new LogMessageWaitStrategy().withRegEx(".*Everything is ready.*"));
 
   @Container
-  public static GenericContainer<?> toxiproxyContainer =
+  public static final GenericContainer<?> toxiproxyContainer =
       new GenericContainer<>(
-              DockerImageName.parse("ghcr.io/open-telemetry/java-test-containers:toxiproxy"))
+              DockerImageName.parse("ghcr.io/open-telemetry/opentelemetry-java/toxiproxy"))
+          .withImagePullPolicy(PullPolicy.alwaysPull())
           .withNetwork(network)
           .withNetworkAliases("toxiproxy")
           .withExposedPorts(TOXIPROXY_CONTROL_PORT, COLLECTOR_PROXY_PORT)
@@ -104,9 +106,7 @@ public class OtlpPipelineStressTest {
 
   private final InMemoryMetricExporter metricExporter = InMemoryMetricExporter.create();
 
-  private SdkTracerProvider sdkTracerProvider;
-  private OpenTelemetry openTelemetry;
-  private IntervalMetricReader intervalMetricReader;
+  private OpenTelemetrySdk openTelemetry;
   private Proxy collectorProxy;
   private ToxiproxyClient toxiproxyClient;
 
@@ -132,8 +132,7 @@ public class OtlpPipelineStressTest {
 
   @AfterEach
   void tearDown() throws IOException {
-    intervalMetricReader.shutdown();
-    sdkTracerProvider.shutdown();
+    openTelemetry.close();
 
     toxiproxyClient.reset();
     collectorProxy.delete();
@@ -186,7 +185,7 @@ public class OtlpPipelineStressTest {
 
     Thread.sleep(10000);
     List<MetricData> finishedMetricItems = metricExporter.getFinishedMetricItems();
-    intervalMetricReader.shutdown();
+    openTelemetry.getSdkMeterProvider().close();
     Thread.sleep(1000);
     reportMetrics(finishedMetricItems);
     Thread.sleep(10000);
@@ -243,24 +242,24 @@ public class OtlpPipelineStressTest {
     Resource resource =
         Resource.create(
             Attributes.builder()
-                .put(ResourceAttributes.SERVICE_NAME, "PerfTester")
-                .put(ResourceAttributes.SERVICE_VERSION, "1.0.1-RC-1")
+                .put(stringKey("service.name"), "PerfTester")
+                .put(stringKey("service.version"), "1.0.1-RC-1")
                 .build());
 
     // set up the metric exporter and wire it into the SDK and a timed reader.
     SdkMeterProvider meterProvider =
-        SdkMeterProvider.builder().setResource(resource).buildAndRegisterGlobal();
-
-    intervalMetricReader =
-        IntervalMetricReader.builder()
-            .setMetricExporter(metricExporter)
-            .setMetricProducers(Collections.singleton(meterProvider))
-            .setExportIntervalMillis(1000)
-            .buildAndStart();
+        SdkMeterProvider.builder()
+            .setResource(resource)
+            .registerMetricReader(
+                PeriodicMetricReader.builder(metricExporter)
+                    .setInterval(Duration.ofSeconds(1))
+                    .build())
+            .build();
 
     // set up the span exporter and wire it into the SDK
     OtlpGrpcSpanExporter spanExporter =
         OtlpGrpcSpanExporter.builder()
+            .setMeterProvider(() -> meterProvider)
             .setEndpoint(
                 "http://"
                     + toxiproxyContainer.getHost()
@@ -270,6 +269,7 @@ public class OtlpPipelineStressTest {
             .build();
     BatchSpanProcessor spanProcessor =
         BatchSpanProcessor.builder(spanExporter)
+            .setMeterProvider(meterProvider)
             //            .setMaxQueueSize(1000)
             //            .setMaxExportBatchSize(1024)
             //            .setScheduleDelayMillis(1000)
@@ -278,7 +278,9 @@ public class OtlpPipelineStressTest {
     SdkTracerProvider tracerProvider =
         SdkTracerProvider.builder().addSpanProcessor(spanProcessor).build();
     openTelemetry =
-        OpenTelemetrySdk.builder().setTracerProvider(tracerProvider).buildAndRegisterGlobal();
-    sdkTracerProvider = tracerProvider;
+        OpenTelemetrySdk.builder()
+            .setTracerProvider(tracerProvider)
+            .setMeterProvider(meterProvider)
+            .buildAndRegisterGlobal();
   }
 }

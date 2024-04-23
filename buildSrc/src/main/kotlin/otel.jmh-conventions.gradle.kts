@@ -7,6 +7,11 @@ dependencies {
   jmh(platform(project(":dependencyManagement")))
   jmh("org.openjdk.jmh:jmh-core")
   jmh("org.openjdk.jmh:jmh-generator-bytecode")
+
+  // This enables running JMH benchmark classes within IntelliJ using
+  // JMH plugins
+  jmh("org.openjdk.jmh:jmh-generator-annprocess")
+  jmhAnnotationProcessor("org.openjdk.jmh:jmh-generator-annprocess")
 }
 
 // invoke jmh on a single benchmark class like so:
@@ -25,12 +30,15 @@ jmh {
 }
 
 jmhReport {
-  jmhResultPath = file("${buildDir}/results/jmh/results.json").absolutePath
-  jmhReportOutput = file("${buildDir}/results/jmh").absolutePath
+  val buildDirectory = layout.buildDirectory.asFile.get()
+  jmhResultPath = file("$buildDirectory/results/jmh/results.json").absolutePath
+  jmhReportOutput = file("$buildDirectory/results/jmh").absolutePath
 }
 
 tasks {
   named("jmh") {
     finalizedBy(named("jmhReport"))
+
+    outputs.cacheIf { false }
   }
 }

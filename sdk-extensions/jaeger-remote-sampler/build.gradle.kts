@@ -3,6 +3,8 @@ plugins {
   id("otel.publish-conventions")
 
   id("otel.animalsniffer-conventions")
+
+  id("com.squareup.wire")
 }
 
 description = "OpenTelemetry - Jaeger Remote sampler"
@@ -13,16 +15,66 @@ dependencies {
   compileOnly(project(":sdk-extensions:autoconfigure"))
 
   implementation(project(":sdk:all"))
-  implementation("io.grpc:grpc-api")
-  implementation("io.grpc:grpc-protobuf")
-  implementation("io.grpc:grpc-stub")
-  implementation("com.google.protobuf:protobuf-java")
+  implementation(project(":exporters:common"))
+  implementation(project(":exporters:sender:okhttp"))
+
+  implementation("com.squareup.okhttp3:okhttp")
+
+  compileOnly("io.grpc:grpc-api")
+  compileOnly("io.grpc:grpc-protobuf")
+  compileOnly("io.grpc:grpc-stub")
 
   testImplementation(project(":sdk:testing"))
   testImplementation(project(":sdk-extensions:autoconfigure"))
-
-  testImplementation("io.grpc:grpc-testing")
+  testImplementation("com.google.guava:guava")
+  testImplementation("com.google.protobuf:protobuf-java")
+  testImplementation("com.linecorp.armeria:armeria-junit5")
+  testImplementation("com.linecorp.armeria:armeria-grpc-protocol")
   testImplementation("org.testcontainers:junit-jupiter")
+}
 
-  testRuntimeOnly("io.grpc:grpc-netty-shaded")
+testing {
+  suites {
+    register<JvmTestSuite>("testGrpcNetty") {
+      dependencies {
+        implementation(project(":sdk:testing"))
+        implementation(project(":exporters:common"))
+        implementation("com.google.protobuf:protobuf-java")
+        implementation("com.linecorp.armeria:armeria-junit5")
+        implementation("com.linecorp.armeria:armeria-grpc-protocol")
+        implementation("org.testcontainers:junit-jupiter")
+        implementation("io.grpc:grpc-netty")
+        implementation("io.grpc:grpc-stub")
+      }
+    }
+  }
+}
+
+afterEvaluate {
+  // Classpath when compiling testGrpcNetty, we add dependency management directly
+  // since it doesn't follow Gradle conventions of naming / properties.
+  dependencies {
+    add("testGrpcNettyCompileProtoPath", platform(project(":dependencyManagement")))
+  }
+}
+
+tasks {
+  check {
+    dependsOn(testing.suites)
+  }
+}
+
+wire {
+  custom {
+    schemaHandlerFactoryClass = "io.opentelemetry.gradle.ProtoFieldsWireHandlerFactory"
+  }
+}
+
+tasks {
+  compileJava {
+    with(options) {
+      // Generated code so can't control serialization.
+      compilerArgs.add("-Xlint:-serial")
+    }
+  }
 }

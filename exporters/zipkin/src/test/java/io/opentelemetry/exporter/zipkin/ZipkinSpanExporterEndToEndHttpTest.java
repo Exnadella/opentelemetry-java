@@ -5,41 +5,57 @@
 
 package io.opentelemetry.exporter.zipkin;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static io.opentelemetry.api.common.AttributeKey.stringKey;
+import static io.opentelemetry.sdk.testing.assertj.OpenTelemetryAssertions.assertThat;
+import static org.mockito.Mockito.mock;
 
+import com.linecorp.armeria.client.WebClient;
+import com.linecorp.armeria.common.AggregatedHttpResponse;
+import com.linecorp.armeria.common.HttpData;
+import com.linecorp.armeria.common.HttpStatus;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.metrics.MeterProvider;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.internal.testing.slf4j.SuppressLogger;
 import io.opentelemetry.sdk.common.CompletableResultCode;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.resources.Resource;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import io.opentelemetry.sdk.testing.trace.TestSpanData;
+import io.opentelemetry.sdk.trace.IdGenerator;
 import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.data.StatusData;
-import io.opentelemetry.semconv.resource.attributes.ResourceAttributes;
 import java.net.InetAddress;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import zipkin2.Endpoint;
 import zipkin2.Span;
-import zipkin2.codec.Encoding;
-import zipkin2.codec.SpanBytesEncoder;
-import zipkin2.junit.ZipkinRule;
+import zipkin2.codec.SpanBytesDecoder;
+import zipkin2.reporter.BytesMessageSender;
+import zipkin2.reporter.Encoding;
+import zipkin2.reporter.SpanBytesEncoder;
 import zipkin2.reporter.okhttp3.OkHttpSender;
 
-/**
- * Tests which use Zipkin's {@link ZipkinRule} to verify that the {@link ZipkinSpanExporter} can
- * send spans via HTTP to Zipkin's API using supported encodings.
- */
-public class ZipkinSpanExporterEndToEndHttpTest {
+@Testcontainers(disabledWithoutDocker = true)
+class ZipkinSpanExporterEndToEndHttpTest {
+  private static final WebClient client = WebClient.of();
 
-  private static final String TRACE_ID = "d239036e7d5cec116b562147388b35bf";
+  private static final int ZIPKIN_API_PORT = 9411;
+
   private static final String SPAN_ID = "9cc1e3049173be09";
   private static final String PARENT_SPAN_ID = "8b03ab423da481c5";
   private static final String SPAN_NAME = "Recv.helloworld.Greeter.SayHello";
@@ -58,60 +74,115 @@ public class ZipkinSpanExporterEndToEndHttpTest {
   private static final String ENDPOINT_V2_SPANS = "/api/v2/spans";
   private static final String SERVICE_NAME = "myService";
 
-  @Rule public ZipkinRule zipkin = new ZipkinRule();
+  private static final Attributes SEEN_ATTRIBUTES =
+      Attributes.of(AttributeKey.stringKey("type"), "span");
+  private static final Attributes EXPORTED_SUCCESS_ATTRIBUTES =
+      SEEN_ATTRIBUTES.toBuilder().put(AttributeKey.booleanKey("success"), true).build();
+  private static final Attributes EXPORTED_FAILED_ATTRIBUTES =
+      SEEN_ATTRIBUTES.toBuilder().put(AttributeKey.booleanKey("success"), false).build();
 
-  @Test
-  public void testExportWithDefaultEncoding() {
-    ZipkinSpanExporter exporter =
-        ZipkinSpanExporter.builder().setEndpoint(zipkin.httpUrl() + ENDPOINT_V2_SPANS).build();
+  @Container
+  public static final GenericContainer<?> zipkinContainer =
+      new GenericContainer<>("ghcr.io/openzipkin/zipkin:2.27")
+          .withExposedPorts(ZIPKIN_API_PORT)
+          .waitingFor(Wait.forHttp("/health").forPort(ZIPKIN_API_PORT));
 
-    exportAndVerify(exporter);
+  private final InMemoryMetricReader sdkMeterReader = InMemoryMetricReader.create();
+  private final SdkMeterProvider sdkMeterProvider =
+      SdkMeterProvider.builder().registerMetricReader(sdkMeterReader).build();
+
+  private static final InetAddress localIp = mock(InetAddress.class);
+
+  @AfterEach
+  void tearDown() {
+    sdkMeterProvider.close();
   }
 
   @Test
-  public void testExportAsProtobuf() {
+  void testExportWithDefaultEncoding() {
+    ZipkinSpanExporter exporter =
+        ZipkinSpanExporter.builder()
+            .setEndpoint(zipkinUrl(ENDPOINT_V2_SPANS))
+            .setMeterProvider(sdkMeterProvider)
+            .setLocalIpAddressSupplier(() -> localIp)
+            .build();
+    exportAndVerify(exporter);
+
+    exporter.close();
+    verifyMetrics(sdkMeterReader, "http-json", EXPORTED_SUCCESS_ATTRIBUTES);
+  }
+
+  @Test
+  void testExportAsProtobuf() {
     ZipkinSpanExporter exporter =
         buildZipkinExporter(
-            zipkin.httpUrl() + ENDPOINT_V2_SPANS, Encoding.PROTO3, SpanBytesEncoder.PROTO3);
+            zipkinUrl(ENDPOINT_V2_SPANS),
+            Encoding.PROTO3,
+            SpanBytesEncoder.PROTO3,
+            sdkMeterProvider);
     exportAndVerify(exporter);
+
+    exporter.close();
+    verifyMetrics(sdkMeterReader, "http", EXPORTED_SUCCESS_ATTRIBUTES);
   }
 
   @Test
-  public void testExportAsThrift() {
+  void testExportAsThrift() {
     @SuppressWarnings("deprecation") // we have to use the deprecated thrift encoding to test it
     ZipkinSpanExporter exporter =
         buildZipkinExporter(
-            zipkin.httpUrl() + ENDPOINT_V1_SPANS, Encoding.THRIFT, SpanBytesEncoder.THRIFT);
+            zipkinUrl(ENDPOINT_V1_SPANS),
+            Encoding.THRIFT,
+            SpanBytesEncoder.THRIFT,
+            sdkMeterProvider);
     exportAndVerify(exporter);
+
+    exporter.close();
+    verifyMetrics(sdkMeterReader, "http", EXPORTED_SUCCESS_ATTRIBUTES);
   }
 
   @Test
-  public void testExportAsJsonV1() {
+  void testExportAsJsonV1() {
     ZipkinSpanExporter exporter =
         buildZipkinExporter(
-            zipkin.httpUrl() + ENDPOINT_V1_SPANS, Encoding.JSON, SpanBytesEncoder.JSON_V1);
+            zipkinUrl(ENDPOINT_V1_SPANS),
+            Encoding.JSON,
+            SpanBytesEncoder.JSON_V1,
+            sdkMeterProvider);
     exportAndVerify(exporter);
+
+    exporter.close();
+    verifyMetrics(sdkMeterReader, "http-json", EXPORTED_SUCCESS_ATTRIBUTES);
   }
 
   @Test
-  public void testExportFailedAsWrongEncoderUsed() {
-    ZipkinSpanExporter zipkinSpanExporter =
+  @SuppressLogger(ZipkinSpanExporter.class)
+  void testExportFailedAsWrongEncoderUsed() {
+    ZipkinSpanExporter exporter =
         buildZipkinExporter(
-            zipkin.httpUrl() + ENDPOINT_V2_SPANS, Encoding.JSON, SpanBytesEncoder.PROTO3);
+            zipkinUrl(ENDPOINT_V2_SPANS), Encoding.JSON, SpanBytesEncoder.PROTO3, sdkMeterProvider);
 
-    SpanData spanData = buildStandardSpan().build();
-    CompletableResultCode resultCode = zipkinSpanExporter.export(Collections.singleton(spanData));
+    String traceId = IdGenerator.random().generateTraceId();
+    SpanData spanData = buildStandardSpan(traceId).build();
+    CompletableResultCode resultCode = exporter.export(Collections.singleton(spanData));
 
     assertThat(resultCode.isSuccess()).isFalse();
-    List<Span> zipkinSpans = zipkin.getTrace(TRACE_ID);
-    assertThat(zipkinSpans).isNull();
+    List<Span> zipkinSpans = getTrace(traceId);
+    assertThat(zipkinSpans).isEmpty();
+
+    exporter.close();
+    verifyMetrics(sdkMeterReader, "http-json", EXPORTED_FAILED_ATTRIBUTES);
   }
 
   private static ZipkinSpanExporter buildZipkinExporter(
-      String endpoint, Encoding encoding, SpanBytesEncoder encoder) {
+      String endpoint, Encoding encoding, SpanBytesEncoder encoder, MeterProvider meterProvider) {
+    BytesMessageSender sender =
+        OkHttpSender.newBuilder().endpoint(endpoint).encoding(encoding).build();
     return ZipkinSpanExporter.builder()
-        .setSender(OkHttpSender.newBuilder().endpoint(endpoint).encoding(encoding).build())
+        .setSender(sender)
         .setEncoder(encoder)
+        .setMeterProvider(meterProvider)
+        .setLocalIpAddressSupplier(() -> localIp)
         .build();
   }
 
@@ -119,28 +190,27 @@ public class ZipkinSpanExporterEndToEndHttpTest {
    * Exports a span, verify that it was received by Zipkin, and check that the span stored by Zipkin
    * matches what was sent.
    */
-  private void exportAndVerify(ZipkinSpanExporter zipkinSpanExporter) {
-
-    SpanData spanData = buildStandardSpan().build();
+  private static void exportAndVerify(ZipkinSpanExporter zipkinSpanExporter) {
+    String traceId = IdGenerator.random().generateTraceId();
+    SpanData spanData = buildStandardSpan(traceId).build();
     CompletableResultCode resultCode = zipkinSpanExporter.export(Collections.singleton(spanData));
     resultCode.join(10, TimeUnit.SECONDS);
 
     assertThat(resultCode.isSuccess()).isTrue();
-    List<Span> zipkinSpans = zipkin.getTrace(TRACE_ID);
+    List<Span> zipkinSpans = getTrace(traceId);
 
     assertThat(zipkinSpans).isNotNull();
     assertThat(zipkinSpans.size()).isEqualTo(1);
-    assertThat(zipkinSpans.get(0))
-        .isEqualTo(buildZipkinSpan(zipkinSpanExporter.getLocalAddressForTest()));
+    assertThat(zipkinSpans.get(0)).isEqualTo(buildZipkinSpan(localIp, traceId));
   }
 
-  private static TestSpanData.Builder buildStandardSpan() {
+  private static TestSpanData.Builder buildStandardSpan(String traceId) {
     return TestSpanData.builder()
         .setSpanContext(
-            SpanContext.create(TRACE_ID, SPAN_ID, TraceFlags.getSampled(), TraceState.getDefault()))
+            SpanContext.create(traceId, SPAN_ID, TraceFlags.getSampled(), TraceState.getDefault()))
         .setParentSpanContext(
             SpanContext.create(
-                TRACE_ID, PARENT_SPAN_ID, TraceFlags.getDefault(), TraceState.getDefault()))
+                traceId, PARENT_SPAN_ID, TraceFlags.getDefault(), TraceState.getDefault()))
         .setStatus(StatusData.ok())
         .setKind(SpanKind.SERVER)
         .setName(SPAN_NAME)
@@ -152,12 +222,12 @@ public class ZipkinSpanExporterEndToEndHttpTest {
         .setLinks(Collections.emptyList())
         .setEndEpochNanos(END_EPOCH_NANOS)
         .setHasEnded(true)
-        .setResource(Resource.create(Attributes.of(ResourceAttributes.SERVICE_NAME, SERVICE_NAME)));
+        .setResource(Resource.create(Attributes.of(stringKey("service.name"), SERVICE_NAME)));
   }
 
-  private static Span buildZipkinSpan(InetAddress localAddress) {
+  private static Span buildZipkinSpan(InetAddress localAddress, String traceId) {
     return Span.newBuilder()
-        .traceId(TRACE_ID)
+        .traceId(traceId)
         .parentId(PARENT_SPAN_ID)
         .id(SPAN_ID)
         .kind(Span.Kind.SERVER)
@@ -165,9 +235,54 @@ public class ZipkinSpanExporterEndToEndHttpTest {
         .timestamp(START_EPOCH_NANOS / 1000)
         .duration((END_EPOCH_NANOS / 1000) - (START_EPOCH_NANOS / 1000))
         .localEndpoint(Endpoint.newBuilder().serviceName(SERVICE_NAME).ip(localAddress).build())
-        .addAnnotation(RECEIVED_TIMESTAMP_NANOS / 1000, "RECEIVED")
-        .addAnnotation(SENT_TIMESTAMP_NANOS / 1000, "SENT")
-        .putTag(ZipkinSpanExporter.OTEL_STATUS_CODE, "OK")
+        .addAnnotation(RECEIVED_TIMESTAMP_NANOS / 1000, "\"RECEIVED\":{}")
+        .addAnnotation(SENT_TIMESTAMP_NANOS / 1000, "\"SENT\":{}")
+        .putTag(OtelToZipkinSpanTransformer.OTEL_STATUS_CODE, "OK")
         .build();
+  }
+
+  private static List<Span> getTrace(String traceId) {
+    AggregatedHttpResponse response =
+        client.get(zipkinUrl("/api/v2/trace/" + traceId)).aggregate().join();
+    if (response.status().equals(HttpStatus.NOT_FOUND)) {
+      return Collections.emptyList();
+    }
+    try (HttpData content = response.content()) {
+      return SpanBytesDecoder.JSON_V2.decodeList(content.array());
+    }
+  }
+
+  private static String zipkinUrl(String endpoint) {
+    return "http://localhost:" + zipkinContainer.getMappedPort(ZIPKIN_API_PORT) + endpoint;
+  }
+
+  private static void verifyMetrics(
+      InMemoryMetricReader sdkMeterReader, String transportName, Attributes exportedAttributes) {
+    assertThat(sdkMeterReader.collectAllMetrics())
+        .allSatisfy(
+            metric ->
+                assertThat(metric)
+                    .hasInstrumentationScope(
+                        InstrumentationScopeInfo.create(
+                            "io.opentelemetry.exporters.zipkin-" + transportName)))
+        .satisfiesExactlyInAnyOrder(
+            metric ->
+                assertThat(metric)
+                    .hasName("zipkin.exporter.seen")
+                    .hasLongSumSatisfying(
+                        sum ->
+                            sum.isMonotonic()
+                                .isCumulative()
+                                .hasPointsSatisfying(
+                                    point -> point.hasAttributes(SEEN_ATTRIBUTES).hasValue(1))),
+            metric ->
+                assertThat(metric)
+                    .hasName("zipkin.exporter.exported")
+                    .hasLongSumSatisfying(
+                        sum ->
+                            sum.isMonotonic()
+                                .isCumulative()
+                                .hasPointsSatisfying(
+                                    point -> point.hasAttributes(exportedAttributes).hasValue(1))));
   }
 }

@@ -10,50 +10,61 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.netmikey.logunit.api.LogCapturer;
 import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.internal.testing.slf4j.SuppressLogger;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.metrics.InstrumentType;
 import io.opentelemetry.sdk.metrics.data.AggregationTemporality;
-import io.opentelemetry.sdk.metrics.data.DoublePointData;
-import io.opentelemetry.sdk.metrics.data.DoubleSumData;
 import io.opentelemetry.sdk.metrics.data.MetricData;
 import io.opentelemetry.sdk.metrics.export.MetricExporter;
+import io.opentelemetry.sdk.metrics.internal.data.ImmutableDoublePointData;
+import io.opentelemetry.sdk.metrics.internal.data.ImmutableMetricData;
+import io.opentelemetry.sdk.metrics.internal.data.ImmutableSumData;
 import io.opentelemetry.sdk.resources.Resource;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.skyscreamer.jsonassert.JSONAssert;
 import org.slf4j.event.Level;
 
+@SuppressLogger(OtlpJsonLoggingMetricExporter.class)
 class OtlpJsonLoggingMetricExporterTest {
 
   private static final Resource RESOURCE =
       Resource.create(Attributes.builder().put("key", "value").build());
 
   private static final MetricData METRIC1 =
-      MetricData.createDoubleSum(
+      ImmutableMetricData.createDoubleSum(
           RESOURCE,
-          InstrumentationLibraryInfo.create("instrumentation", "1"),
+          InstrumentationScopeInfo.builder("instrumentation")
+              .setVersion("1")
+              .setAttributes(Attributes.builder().put("key", "value").build())
+              .build(),
           "metric1",
           "metric1 description",
           "m",
-          DoubleSumData.create(
+          ImmutableSumData.create(
               true,
               AggregationTemporality.CUMULATIVE,
               Arrays.asList(
-                  DoublePointData.create(1, 2, Attributes.of(stringKey("cat"), "meow"), 4))));
+                  ImmutableDoublePointData.create(
+                      1, 2, Attributes.of(stringKey("cat"), "meow"), 4))));
 
   private static final MetricData METRIC2 =
-      MetricData.createDoubleSum(
+      ImmutableMetricData.createDoubleSum(
           RESOURCE,
-          InstrumentationLibraryInfo.create("instrumentation2", "2"),
+          InstrumentationScopeInfo.builder("instrumentation2").setVersion("2").build(),
           "metric2",
           "metric2 description",
           "s",
-          DoubleSumData.create(
+          ImmutableSumData.create(
               true,
               AggregationTemporality.CUMULATIVE,
               Arrays.asList(
-                  DoublePointData.create(1, 2, Attributes.of(stringKey("cat"), "meow"), 4))));
+                  ImmutableDoublePointData.create(
+                      1, 2, Attributes.of(stringKey("cat"), "meow"), 4))));
 
   @RegisterExtension
   LogCapturer logs = LogCapturer.create().captureForType(OtlpJsonLoggingMetricExporter.class);
@@ -63,6 +74,18 @@ class OtlpJsonLoggingMetricExporterTest {
   @BeforeEach
   void setUp() {
     exporter = OtlpJsonLoggingMetricExporter.create();
+  }
+
+  @Test
+  void getAggregationTemporality() {
+    assertThat(
+            OtlpJsonLoggingMetricExporter.create()
+                .getAggregationTemporality(InstrumentType.COUNTER))
+        .isEqualTo(AggregationTemporality.CUMULATIVE);
+    assertThat(
+            OtlpJsonLoggingMetricExporter.create(AggregationTemporality.DELTA)
+                .getAggregationTemporality(InstrumentType.COUNTER))
+        .isEqualTo(AggregationTemporality.DELTA);
   }
 
   @Test
@@ -82,8 +105,8 @@ class OtlpJsonLoggingMetricExporterTest {
             + "      }"
             + "    }]"
             + "  },"
-            + "  \"instrumentationLibraryMetrics\": [{"
-            + "    \"instrumentationLibrary\": {"
+            + "  \"scopeMetrics\": [{"
+            + "    \"scope\": {"
             + "      \"name\": \"instrumentation2\","
             + "      \"version\": \"2\""
             + "    },"
@@ -97,22 +120,24 @@ class OtlpJsonLoggingMetricExporterTest {
             + "            \"key\": \"cat\","
             + "            \"value\": {\"stringValue\": \"meow\"}"
             + "          }],"
-            + "          \"labels\": [{"
-            + "            \"key\": \"cat\","
-            + "            \"value\": \"meow\""
-            + "          }],"
             + "          \"startTimeUnixNano\": \"1\","
             + "          \"timeUnixNano\": \"2\","
             + "          \"asDouble\": 4.0"
             + "        }],"
-            + "        \"aggregationTemporality\": \"AGGREGATION_TEMPORALITY_CUMULATIVE\","
+            + "        \"aggregationTemporality\": 2,"
             + "        \"isMonotonic\": true"
             + "      }"
             + "    }]"
             + "  }, {"
-            + "    \"instrumentationLibrary\": {"
+            + "    \"scope\": {"
             + "      \"name\": \"instrumentation\","
-            + "      \"version\": \"1\""
+            + "      \"version\": \"1\","
+            + "      \"attributes\":[{"
+            + "        \"key\":\"key\","
+            + "        \"value\":{"
+            + "          \"stringValue\":\"value\""
+            + "        }"
+            + "      }]"
             + "    },"
             + "    \"metrics\": [{"
             + "      \"name\": \"metric1\","
@@ -124,22 +149,18 @@ class OtlpJsonLoggingMetricExporterTest {
             + "            \"key\": \"cat\","
             + "            \"value\": {\"stringValue\": \"meow\"}"
             + "          }],"
-            + "          \"labels\": [{"
-            + "            \"key\": \"cat\","
-            + "            \"value\": \"meow\""
-            + "          }],"
             + "          \"startTimeUnixNano\": \"1\","
             + "          \"timeUnixNano\": \"2\","
             + "          \"asDouble\": 4.0"
             + "        }],"
-            + "        \"aggregationTemporality\": \"AGGREGATION_TEMPORALITY_CUMULATIVE\","
+            + "        \"aggregationTemporality\": 2,"
             + "        \"isMonotonic\": true"
             + "      }"
             + "    }]"
             + "  }]"
             + "}",
         logs.getEvents().get(0).getMessage(),
-        /* strict= */ true);
+        /* strict= */ false);
     assertThat(logs.getEvents().get(0).getMessage()).doesNotContain("\n");
   }
 
@@ -151,5 +172,14 @@ class OtlpJsonLoggingMetricExporterTest {
   @Test
   void shutdown() {
     assertThat(exporter.shutdown().isSuccess()).isTrue();
+    assertThat(
+            exporter
+                .export(Collections.singletonList(METRIC1))
+                .join(10, TimeUnit.SECONDS)
+                .isSuccess())
+        .isFalse();
+    assertThat(logs.getEvents()).isEmpty();
+    assertThat(exporter.shutdown().isSuccess()).isTrue();
+    logs.assertContains("Calling shutdown() multiple times.");
   }
 }

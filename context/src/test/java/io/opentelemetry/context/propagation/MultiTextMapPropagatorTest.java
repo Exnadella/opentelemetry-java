@@ -6,7 +6,7 @@
 package io.opentelemetry.context.propagation;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -51,9 +51,8 @@ class MultiTextMapPropagatorTest {
 
   @Test
   void addPropagator_null() {
-    assertThrows(
-        NullPointerException.class,
-        () -> new MultiTextMapPropagator((List<TextMapPropagator>) null));
+    assertThatThrownBy(() -> new MultiTextMapPropagator((List<TextMapPropagator>) null))
+        .isInstanceOf(NullPointerException.class);
   }
 
   @Test
@@ -82,7 +81,7 @@ class MultiTextMapPropagatorTest {
     when(propagator2.fields()).thenReturn(Arrays.asList("buggy", "bumpers"));
     TextMapPropagator prop = new MultiTextMapPropagator(propagator1, propagator2);
     Collection<String> fields = prop.fields();
-    assertThrows(UnsupportedOperationException.class, () -> fields.add("hi"));
+    assertThatThrownBy(() -> fields.add("hi")).isInstanceOf(UnsupportedOperationException.class);
   }
 
   @Test
@@ -167,5 +166,11 @@ class MultiTextMapPropagatorTest {
     Context context = Context.current().with(KEY, "treasure");
     new MultiTextMapPropagator(propagator1, propagator2).inject(context, carrier, null);
     assertThat(carrier).isEmpty();
+  }
+
+  @Test
+  void toString_Valid() {
+    assertThat(new MultiTextMapPropagator(propagator1, propagator2).toString())
+        .isEqualTo("MultiTextMapPropagator{textMapPropagators=[propagator1, propagator2]}");
   }
 }

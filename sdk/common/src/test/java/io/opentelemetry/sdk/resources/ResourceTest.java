@@ -17,9 +17,10 @@ import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.google.common.testing.EqualsTester;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.AttributeType;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.common.AttributesBuilder;
-import io.opentelemetry.semconv.resource.attributes.ResourceAttributes;
 import java.util.Arrays;
 import java.util.Collections;
 import org.junit.jupiter.api.BeforeEach;
@@ -94,6 +95,35 @@ class ResourceTest {
   }
 
   @Test
+  void builder_ignoreNull() {
+    Resource resource =
+        Resource.builder()
+            .put((String) null, "cat")
+            .put("bear", (String) null)
+            .put(null, 1.0)
+            .put(null, false)
+            .put(null, "foo", "bar")
+            .put("dog", (String[]) null)
+            .put(null, 1.0, 2.0)
+            .put("mouse", (double[]) null)
+            .put(null, true, false)
+            .put("elephant", (boolean[]) null)
+            .put((AttributeKey<String>) null, "foo")
+            .put(stringKey("monkey"), null)
+            .put(stringKey(null), "foo")
+            .put(stringKey(""), "foo")
+            .put((AttributeKey<Long>) null, 10)
+            .put(longKey(null), 10)
+            .put(longKey(""), 10)
+            .putAll((Attributes) null)
+            .putAll((Resource) null)
+            .setSchemaUrl(null)
+            .build();
+
+    assertThat(resource).isEqualTo(Resource.empty());
+  }
+
+  @Test
   void create_NullEmptyArray() {
     AttributesBuilder attributes = Attributes.builder();
 
@@ -118,10 +148,10 @@ class ResourceTest {
     assertThat(resource.getAttributes().size()).isEqualTo(8);
 
     // Null arrays should be dropped
-    attributes.put(stringArrayKey("NullArrayStringKey"), null);
-    attributes.put(longArrayKey("NullArrayLongKey"), null);
-    attributes.put(doubleArrayKey("NullArrayDoubleKey"), null);
-    attributes.put(booleanArrayKey("NullArrayBooleanKey"), null);
+    attributes.put(stringArrayKey("NullArrayStringKey"), (String[]) null);
+    attributes.put(longArrayKey("NullArrayLongKey"), (Long[]) null);
+    attributes.put(doubleArrayKey("NullArrayDoubleKey"), (Double[]) null);
+    attributes.put(booleanArrayKey("NullArrayBooleanKey"), (Boolean[]) null);
 
     resource = Resource.create(attributes.build());
     assertThat(resource.getAttributes()).isNotNull();
@@ -207,12 +237,10 @@ class ResourceTest {
   @Test
   void testDefaultResources() {
     Resource resource = Resource.getDefault();
-    assertThat(resource.getAttribute(ResourceAttributes.SERVICE_NAME))
-        .isEqualTo("unknown_service:java");
-    assertThat(resource.getAttribute(ResourceAttributes.TELEMETRY_SDK_NAME))
-        .isEqualTo("opentelemetry");
-    assertThat(resource.getAttribute(ResourceAttributes.TELEMETRY_SDK_LANGUAGE)).isEqualTo("java");
-    assertThat(resource.getAttribute(ResourceAttributes.TELEMETRY_SDK_VERSION))
+    assertThat(resource.getAttribute(stringKey("service.name"))).isEqualTo("unknown_service:java");
+    assertThat(resource.getAttribute(stringKey("telemetry.sdk.name"))).isEqualTo("opentelemetry");
+    assertThat(resource.getAttribute(stringKey("telemetry.sdk.language"))).isEqualTo("java");
+    assertThat(resource.getAttribute(stringKey("telemetry.sdk.version")))
         .isEqualTo(System.getProperty("otel.test.project-version"));
   }
 
@@ -226,7 +254,7 @@ class ResourceTest {
 
     // then no exception is thrown
     // and
-    assertThat(builder.build().getAttribute(ResourceAttributes.SERVICE_NAME))
+    assertThat(builder.build().getAttribute(stringKey("service.name")))
         .isEqualTo("unknown_service:java");
   }
 
@@ -286,5 +314,58 @@ class ResourceTest {
     assertThat(attributes.get(longKey("int in disguise"))).isEqualTo(21);
     assertThat(attributes.get(stringKey("hello"))).isEqualTo("world");
     assertThat(attributes.get(stringKey("OpenTelemetry"))).isEqualTo("Java");
+  }
+
+  @Test
+  public void toBuilder() {
+
+    Resource resource =
+        Resource.builder().setSchemaUrl("http://example.com").put("foo", "val").build();
+
+    Resource newResource = resource.toBuilder().build();
+
+    assertThat(newResource).isNotSameAs(Resource.getDefault());
+    assertThat(newResource.getAttribute(stringKey("foo"))).isEqualTo("val");
+    assertThat(newResource.getSchemaUrl()).isEqualTo("http://example.com");
+  }
+
+  @Test
+  public void removeIf() {
+    assertThat(Resource.builder().removeIf(unused -> true).build()).isEqualTo(Resource.empty());
+    assertThat(Resource.builder().removeIf(key -> key.getKey().equals("key1")).build())
+        .isEqualTo(Resource.empty());
+    assertThat(
+            Resource.builder()
+                .put("key1", "value1")
+                .removeIf(key -> key.getKey().equals("key1"))
+                .removeIf(key -> key.getKey().equals("key1"))
+                .build())
+        .isEqualTo(Resource.empty());
+    assertThat(
+            Resource.builder()
+                .put("key1", "value1")
+                .put("key1", "value2")
+                .put("key2", "value2")
+                .put("key3", "value3")
+                .removeIf(key -> key.getKey().equals("key1"))
+                .build())
+        .isEqualTo(Resource.builder().put("key2", "value2").put("key3", "value3").build());
+    assertThat(
+            Resource.builder()
+                .put("key1", "value1A")
+                .put("key1", true)
+                .removeIf(
+                    key ->
+                        key.getKey().equals("key1") && key.getType().equals(AttributeType.STRING))
+                .build())
+        .isEqualTo(Resource.builder().put("key1", true).build());
+    assertThat(
+            Resource.builder()
+                .put("key1", "value1")
+                .put("key2", "value2")
+                .put("foo", "bar")
+                .removeIf(key -> key.getKey().matches("key.*"))
+                .build())
+        .isEqualTo(Resource.builder().put("foo", "bar").build());
   }
 }

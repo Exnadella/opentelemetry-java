@@ -39,6 +39,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>This class has been copied as is from
  * https://github.com/raphw/weak-lock-free/blob/ad0e5e0c04d4a31f9485bf12b89afbc9d75473b3/src/main/java/com/blogspot/mydailyjava/weaklockfree/WeakConcurrentMap.java
+ *
+ * <p>This class is internal and is hence not for public use. Its APIs are unstable and can change
+ * at any time.
  */
 // Suppress warnings since this is copied as-is.
 @SuppressWarnings({
@@ -70,7 +73,9 @@ public class WeakConcurrentMap<K, V>
 
   private final boolean reuseKeys;
 
-  /** @param cleanerThread {@code true} if a thread should be started that removes stale entries. */
+  /**
+   * @param cleanerThread {@code true} if a thread should be started that removes stale entries.
+   */
   public WeakConcurrentMap(boolean cleanerThread) {
     this(cleanerThread, isPersistentClassLoader(LookupKey.class.getClassLoader()));
   }
@@ -91,7 +96,7 @@ public class WeakConcurrentMap<K, V>
       return classLoader == null // bootstrap class loader
           || classLoader == ClassLoader.getSystemClassLoader()
           || classLoader
-              == ClassLoader.getSystemClassLoader().getParent(); // ext/platfrom class loader;
+              == ClassLoader.getSystemClassLoader().getParent(); // ext/platform class loader;
     } catch (Throwable ignored) {
       return false;
     }
@@ -146,7 +151,9 @@ public class WeakConcurrentMap<K, V>
     lookupKey.reset();
   }
 
-  /** @return The cleaner thread or {@code null} if no such thread was set. */
+  /**
+   * @return The cleaner thread or {@code null} if no such thread was set.
+   */
   public Thread getCleanerThread() {
     return thread;
   }

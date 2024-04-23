@@ -10,6 +10,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.internal.ApiUsageLogger;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.ImplicitContextKeyed;
 import java.time.Instant;
@@ -42,6 +43,7 @@ public interface Span extends ImplicitContextKeyed {
    */
   static Span fromContext(Context context) {
     if (context == null) {
+      ApiUsageLogger.log("context is null");
       return Span.getInvalid();
     }
     Span span = context.get(SpanContextKey.KEY);
@@ -55,6 +57,7 @@ public interface Span extends ImplicitContextKeyed {
   @Nullable
   static Span fromContextOrNull(Context context) {
     if (context == null) {
+      ApiUsageLogger.log("context is null");
       return null;
     }
     return context.get(SpanContextKey.KEY);
@@ -71,10 +74,11 @@ public interface Span extends ImplicitContextKeyed {
   /**
    * Returns a non-recording {@link Span} that holds the provided {@link SpanContext} but has no
    * functionality. It will not be exported and all tracing operations are no-op, but it can be used
-   * to propagate a valid {@link SpanContext} downstream.
+   * to propagate a {@link SpanContext} downstream.
    */
   static Span wrap(SpanContext spanContext) {
-    if (spanContext == null || !spanContext.isValid()) {
+    if (spanContext == null) {
+      ApiUsageLogger.log("context is null");
       return getInvalid();
     }
     return PropagatedSpan.create(spanContext);
@@ -84,8 +88,7 @@ public interface Span extends ImplicitContextKeyed {
    * Sets an attribute to the {@code Span}. If the {@code Span} previously contained a mapping for
    * the key, the old value is replaced by the specified value.
    *
-   * <p>If a null or empty String {@code value} is passed in, the behavior is undefined, and hence
-   * strongly discouraged.
+   * <p>Empty String "" and null are valid attribute {@code value}, but not valid keys.
    *
    * <p>Note: It is strongly recommended to use {@link #setAttribute(AttributeKey, Object)}, and
    * pre-allocate your keys, if possible.
@@ -355,6 +358,49 @@ public interface Span extends ImplicitContextKeyed {
    * @return this.
    */
   Span updateName(String name);
+
+  /**
+   * Adds a link to this {@code Span}.
+   *
+   * <p>Links are used to link {@link Span}s in different traces. Used (for example) in batching
+   * operations, where a single batch handler processes multiple requests from different traces or
+   * the same trace.
+   *
+   * <p>Implementations may ignore calls with an {@linkplain SpanContext#isValid() invalid span
+   * context}.
+   *
+   * <p>Callers should prefer to add links before starting the span via {@link
+   * SpanBuilder#addLink(SpanContext)} if possible.
+   *
+   * @param spanContext the context of the linked {@code Span}.
+   * @return this.
+   * @since 1.37.0
+   */
+  default Span addLink(SpanContext spanContext) {
+    return addLink(spanContext, Attributes.empty());
+  }
+
+  /**
+   * Adds a link to this {@code Span}.
+   *
+   * <p>Links are used to link {@link Span}s in different traces. Used (for example) in batching
+   * operations, where a single batch handler processes multiple requests from different traces or
+   * the same trace.
+   *
+   * <p>Implementations may ignore calls with an {@linkplain SpanContext#isValid() invalid span
+   * context}.
+   *
+   * <p>Callers should prefer to add links before starting the span via {@link
+   * SpanBuilder#addLink(SpanContext, Attributes)} if possible.
+   *
+   * @param spanContext the context of the linked {@code Span}.
+   * @param attributes the attributes of the {@code Link}.
+   * @return this.
+   * @since 1.37.0
+   */
+  default Span addLink(SpanContext spanContext, Attributes attributes) {
+    return this;
+  }
 
   /**
    * Marks the end of {@code Span} execution.

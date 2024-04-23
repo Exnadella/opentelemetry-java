@@ -1,4 +1,9 @@
+import com.google.auto.value.AutoValue
+import japicmp.model.*
 import me.champeau.gradle.japicmp.JapicmpTask
+import me.champeau.gradle.japicmp.report.Violation
+import me.champeau.gradle.japicmp.report.stdrules.*
+
 
 plugins {
   base
@@ -20,6 +25,80 @@ val latestReleasedVersion: String by lazy {
   moduleVersion
 }
 
+class AllowNewAbstractMethodOnAutovalueClasses : AbstractRecordingSeenMembers() {
+  override fun maybeAddViolation(member: JApiCompatibility): Violation? {
+    val allowableAutovalueChanges = setOf(JApiCompatibilityChange.METHOD_ABSTRACT_ADDED_TO_CLASS, JApiCompatibilityChange.METHOD_ADDED_TO_PUBLIC_CLASS)
+    if (member.compatibilityChanges.filter { !allowableAutovalueChanges.contains(it) }.isEmpty() &&
+      member is JApiMethod &&
+      member.getjApiClass().newClass.get().getAnnotation(AutoValue::class.java) != null
+    ) {
+      return Violation.accept(member, "Autovalue will automatically add implementation")
+    }
+    if (member.compatibilityChanges.isEmpty() &&
+      member is JApiClass &&
+      member.newClass.get().getAnnotation(AutoValue::class.java) != null) {
+      return Violation.accept(member, "Autovalue class modification is allowed")
+    }
+    return null
+  }
+}
+
+class SourceIncompatibleRule : AbstractRecordingSeenMembers() {
+
+  fun ignoreAddLogRecordProcessorCustomizerReturnTypeChange(member: JApiCompatibility): Violation? {
+    if (member is JApiClass &&
+      member.newClass.get().name.equals("io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdkBuilder") &&
+      member.isChangeCausedByClassElement
+    ) {
+      // member.isChangeCausedByClassElement check above
+      // limits source of changes to fields, methods and constructors
+
+      for (method in member.methods) {
+        if (!method.isSourceCompatible()) {
+          // addLogRecordProcessorCustomizer method had a return type change from base to impl class,
+          // japicmp (correctly) doesn't consider it as a METHOD_RETURN_TYPE_CHANGED
+          // compatibility issue. But still thinks that something wrong.
+          // Since it thinks that method did not change, it reports it as class-level violation,
+          // and we need to suppress it, but keep other checks on.
+          if (method.name.equals("addLogRecordProcessorCustomizer") &&
+            method.compatibilityChanges.isEmpty() &&
+            method.changeStatus == JApiChangeStatus.UNCHANGED) {
+            return null;
+          }
+          return Violation.error(method, "Method is not source compatible: $method")
+        }
+      }
+
+      for (field in member.fields) {
+        if (!field.isSourceCompatible()) {
+          return Violation.error(field, "Field is not source compatible: $field")
+        }
+      }
+
+      for (constructor in member.constructors) {
+        if (!constructor.isSourceCompatible()) {
+          return Violation.error(constructor, "Constructor is not source compatible: $constructor")
+        }
+      }
+    }
+
+    return Violation.error(member, "Not source compatible: $member")
+  }
+
+  override fun maybeAddViolation(member: JApiCompatibility): Violation? {
+    if (!member.isSourceCompatible()) {
+      // TODO: remove after 1.36.0 is released, see https://github.com/open-telemetry/opentelemetry-java/pull/6248
+      if (member.compatibilityChanges.isEmpty()) {
+        return ignoreAddLogRecordProcessorCustomizerReturnTypeChange(member)
+      }
+      // end of suppression
+
+      return Violation.error(member, "Not source compatible: $member")
+    }
+    return null
+  }
+}
+
 /**
  * Locate the project's artifact of a particular version.
  */
@@ -30,9 +109,9 @@ fun findArtifact(version: String): File {
     // Maven coordinates as the project, which Gradle would not allow otherwise.
     group = "virtual_group"
     val depModule = "io.opentelemetry:${base.archivesName.get()}:$version@jar"
-    val depJar = "${base.archivesName.get()}-${version}.jar"
+    val depJar = "${base.archivesName.get()}-$version.jar"
     val configuration: Configuration = configurations.detachedConfiguration(
-      dependencies.create(depModule)
+      dependencies.create(depModule),
     )
     return files(configuration.files).filter {
       it.name.equals(depJar)
@@ -53,30 +132,58 @@ if (!project.hasProperty("otel.release") && !project.name.startsWith("bom")) {
         val apiNewVersion: String? by project
         val newArtifact = apiNewVersion?.let { findArtifact(it) }
           ?: file(getByName<Jar>("jar").archiveFile)
-        newClasspath = files(newArtifact)
+        newClasspath.from(files(newArtifact))
 
-        //only output changes, not everything
-        isOnlyModified = true
+        // only output changes, not everything
+        onlyModified.set(true)
 
         // the japicmp "old" version is either the user-specified one, or the latest release.
         val apiBaseVersion: String? by project
         val baselineVersion = apiBaseVersion ?: latestReleasedVersion
-        oldClasspath = try {
-          files(findArtifact(baselineVersion))
-        } catch (e: Exception) {
-          //if we can't find the baseline artifact, this is probably one that's never been published before,
-          //so publish the whole API. We do that by flipping this flag, and comparing the current against nothing.
-          isOnlyModified = false
-          files()
+        oldClasspath.from(
+          try {
+            files(findArtifact(baselineVersion))
+          } catch (e: Exception) {
+            // if we can't find the baseline artifact, this is probably one that's never been published before,
+            // so publish the whole API. We do that by flipping this flag, and comparing the current against nothing.
+            onlyModified.set(false)
+            files()
+          },
+        )
+
+        // Reproduce defaults from https://github.com/melix/japicmp-gradle-plugin/blob/09f52739ef1fccda6b4310cf3f4b19dc97377024/src/main/java/me/champeau/gradle/japicmp/report/ViolationsGenerator.java#L130
+        // with some changes.
+        val exclusions = mutableListOf<String>()
+        // Generics are not detected correctly
+        exclusions.add("CLASS_GENERIC_TEMPLATE_CHANGED")
+        // Allow new default methods on interfaces
+        exclusions.add("METHOD_NEW_DEFAULT")
+        // Allow adding default implementations for default methods
+        exclusions.add("METHOD_ABSTRACT_NOW_DEFAULT")
+        // Bug prevents recognizing default methods of superinterface.
+        // Fixed in https://github.com/siom79/japicmp/pull/343 but not yet available in me.champeau.gradle.japicmp
+        exclusions.add("METHOD_ABSTRACT_ADDED_IN_IMPLEMENTED_INTERFACE")
+        compatibilityChangeExcludes.set(exclusions)
+        richReport {
+          addSetupRule(RecordSeenMembersSetup::class.java)
+          addRule(JApiChangeStatus.NEW, SourceCompatibleRule::class.java)
+          addRule(JApiChangeStatus.MODIFIED, SourceCompatibleRule::class.java)
+          addRule(JApiChangeStatus.UNCHANGED, UnchangedMemberRule::class.java)
+          // Allow new abstract methods on autovalue
+          addRule(AllowNewAbstractMethodOnAutovalueClasses::class.java)
+          addRule(BinaryIncompatibleRule::class.java)
+          // Disallow source incompatible changes, which are allowed by default for some reason
+          addRule(SourceIncompatibleRule::class.java)
         }
 
-        //this is needed so that we only consider the current artifact, and not dependencies
-        isIgnoreMissingClasses = true
-        // double wildcards don't seem to work here (*.internal.*)
-        packageExcludes = listOf("*.internal", "io.opentelemetry.internal.shaded.jctools.*")
+        // this is needed so that we only consider the current artifact, and not dependencies
+        ignoreMissingClasses.set(true)
+        packageExcludes.addAll("*.internal", "*.internal.*", "io.opentelemetry.internal.shaded.jctools.*")
         val baseVersionString = if (apiBaseVersion == null) "latest" else baselineVersion
-        txtOutputFile = apiNewVersion?.let { file("$rootDir/docs/apidiffs/${apiNewVersion}_vs_${baselineVersion}/${base.archivesName.get()}.txt") }
-          ?: file("$rootDir/docs/apidiffs/current_vs_${baseVersionString}/${base.archivesName.get()}.txt")
+        txtOutputFile.set(
+          apiNewVersion?.let { file("$rootDir/docs/apidiffs/${apiNewVersion}_vs_$baselineVersion/${base.archivesName.get()}.txt") }
+            ?: file("$rootDir/docs/apidiffs/current_vs_$baseVersionString/${base.archivesName.get()}.txt"),
+        )
       }
       // have the check task depend on the api comparison task, to make it more likely it will get used.
       named("check") {

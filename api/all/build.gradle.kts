@@ -8,7 +8,7 @@ plugins {
 
 description = "OpenTelemetry API"
 otelJava.moduleName.set("io.opentelemetry.api")
-base.archivesBaseName = "opentelemetry-api"
+base.archivesName.set("opentelemetry-api")
 
 dependencies {
   api(project(":context"))
@@ -17,4 +17,9 @@ dependencies {
 
   testImplementation("edu.berkeley.cs.jqf:jqf-fuzz")
   testImplementation("com.google.guava:guava-testlib")
+}
+
+tasks.test {
+  // Configure environment variable for ConfigUtilTest
+  environment("CONFIG_KEY", "environment")
 }

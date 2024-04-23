@@ -16,13 +16,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
+import javax.annotation.Nullable;
 import org.assertj.core.api.AbstractAssert;
 import org.assertj.core.error.ShouldContainKeys;
+import org.assertj.core.error.ShouldNotContainKeys;
 
 /** Assertions for {@link Attributes}. */
 public final class AttributesAssert extends AbstractAssert<AttributesAssert, Attributes> {
 
-  AttributesAssert(Attributes actual) {
+  AttributesAssert(@Nullable Attributes actual) {
     super(actual, AttributesAssert.class);
   }
 
@@ -177,6 +179,37 @@ public final class AttributesAssert extends AbstractAssert<AttributesAssert, Att
     if (!resolved.isPresent()) {
       failWithMessage(
           ShouldContainKeys.shouldContainKeys(actual, Collections.singleton(key))
+              .create(info.description(), info.representation()));
+    }
+    return this;
+  }
+
+  /**
+   * Asserts the attributes do not contain the given key.
+   *
+   * @since 1.18.0
+   */
+  public AttributesAssert doesNotContainKey(AttributeKey<?> key) {
+    if (actual.get(key) != null) {
+      failWithMessage(
+          ShouldNotContainKeys.shouldNotContainKeys(actual, Collections.singleton(key))
+              .create(info.description(), info.representation()));
+    }
+    return this;
+  }
+
+  /**
+   * Asserts the attributes do not contain the given key.
+   *
+   * @since 1.18.0
+   */
+  public AttributesAssert doesNotContainKey(String key) {
+    boolean containsKey =
+        actual.asMap().keySet().stream()
+            .anyMatch(attributeKey -> attributeKey.getKey().equals(key));
+    if (containsKey) {
+      failWithMessage(
+          ShouldNotContainKeys.shouldNotContainKeys(actual, Collections.singleton(key))
               .create(info.description(), info.representation()));
     }
     return this;

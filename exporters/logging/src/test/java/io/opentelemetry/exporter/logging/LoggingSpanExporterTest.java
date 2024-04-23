@@ -8,7 +8,6 @@ package io.opentelemetry.exporter.logging;
 import static io.opentelemetry.api.common.AttributeKey.booleanKey;
 import static io.opentelemetry.api.common.AttributeKey.longKey;
 import static io.opentelemetry.api.common.AttributeKey.stringKey;
-import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.netmikey.logunit.api.LogCapturer;
@@ -17,8 +16,8 @@ import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
-import io.opentelemetry.sdk.common.CompletableResultCode;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.internal.testing.slf4j.SuppressLogger;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
 import io.opentelemetry.sdk.testing.trace.TestSpanData;
 import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.sdk.trace.data.SpanData;
@@ -32,13 +31,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 import java.util.logging.StreamHandler;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.slf4j.event.Level;
 
-/** Tests for the {@link LoggingSpanExporter}. */
+@SuppressLogger(LoggingSpanExporter.class)
 class LoggingSpanExporterTest {
 
   private static final SpanData SPAN1 =
@@ -64,7 +62,7 @@ class LoggingSpanExporterTest {
                       Attributes.of(booleanKey("important"), true))))
           .setTotalRecordedEvents(1)
           .setTotalRecordedLinks(0)
-          .setInstrumentationLibraryInfo(InstrumentationLibraryInfo.create("tracer1", null))
+          .setInstrumentationScopeInfo(InstrumentationScopeInfo.create("tracer1"))
           .build();
 
   private static final SpanData SPAN2 =
@@ -81,7 +79,8 @@ class LoggingSpanExporterTest {
           .setStatus(StatusData.error())
           .setName("testSpan2")
           .setKind(SpanKind.CLIENT)
-          .setInstrumentationLibraryInfo(InstrumentationLibraryInfo.create("tracer2", "1.0"))
+          .setInstrumentationScopeInfo(
+              InstrumentationScopeInfo.builder("tracer2").setVersion("1.0").build())
           .build();
 
   @RegisterExtension
@@ -91,17 +90,12 @@ class LoggingSpanExporterTest {
 
   @BeforeEach
   void setUp() {
-    exporter = new LoggingSpanExporter();
-  }
-
-  @AfterEach
-  void tearDown() {
-    exporter.close();
+    exporter = LoggingSpanExporter.create();
   }
 
   @Test
-  void log() {
-    exporter.export(Arrays.asList(SPAN1, SPAN2));
+  void export() {
+    assertThat(exporter.export(Arrays.asList(SPAN1, SPAN2)).isSuccess()).isTrue();
 
     assertThat(logs.getEvents())
         .hasSize(2)
@@ -118,38 +112,8 @@ class LoggingSpanExporterTest {
   }
 
   @Test
-  void returnCode() {
-    long epochNanos = TimeUnit.MILLISECONDS.toNanos(System.currentTimeMillis());
-    SpanData spanData =
-        TestSpanData.builder()
-            .setHasEnded(true)
-            .setSpanContext(
-                SpanContext.create(
-                    "12345678876543211234567887654321",
-                    "8765432112345678",
-                    TraceFlags.getSampled(),
-                    TraceState.getDefault()))
-            .setStartEpochNanos(epochNanos)
-            .setEndEpochNanos(epochNanos + 1000)
-            .setStatus(StatusData.ok())
-            .setName("testSpan")
-            .setKind(SpanKind.INTERNAL)
-            .setEvents(
-                Collections.singletonList(
-                    EventData.create(
-                        epochNanos + 500,
-                        "somethingHappenedHere",
-                        Attributes.of(booleanKey("important"), true))))
-            .setTotalRecordedEvents(1)
-            .setTotalRecordedLinks(0)
-            .build();
-    CompletableResultCode resultCode = exporter.export(singletonList(spanData));
-    assertThat(resultCode.isSuccess()).isTrue();
-  }
-
-  @Test
-  void testFlush() {
-    final AtomicBoolean flushed = new AtomicBoolean(false);
+  void flush() {
+    AtomicBoolean flushed = new AtomicBoolean(false);
     Logger.getLogger(LoggingSpanExporter.class.getName())
         .addHandler(
             new StreamHandler(new PrintStream(new ByteArrayOutputStream()), new SimpleFormatter()) {
@@ -160,5 +124,24 @@ class LoggingSpanExporterTest {
             });
     exporter.flush();
     assertThat(flushed.get()).isTrue();
+  }
+
+  @Test
+  void shutdown() {
+    assertThat(exporter.shutdown().isSuccess()).isTrue();
+    assertThat(
+            exporter
+                .export(Collections.singletonList(SPAN1))
+                .join(10, TimeUnit.SECONDS)
+                .isSuccess())
+        .isFalse();
+    assertThat(logs.getEvents()).isEmpty();
+    assertThat(exporter.shutdown().isSuccess()).isTrue();
+    logs.assertContains("Calling shutdown() multiple times.");
+  }
+
+  @Test
+  void stringRepresentation() {
+    assertThat(LoggingSpanExporter.create().toString()).isEqualTo("LoggingSpanExporter{}");
   }
 }

@@ -2,6 +2,7 @@ codecov:
   notify:
     require_ci_to_pass: yes
   strict_yaml_branch: main  # only use the latest copy on main branch
+  max_report_age: off
 
 coverage:
   precision: 2
@@ -10,15 +11,15 @@ coverage:
   status:
     project:
       default:
-        enabled: yes
         target: 90%
         paths:
-          - api
-          - sdk
+          - "!opencensus-shim/"
+          - "!opentracing-shim/"
+      unmaintained:
+        target: 80%
+        paths:
+          - "opencensus-shim/"
+          - "opentracing-shim/"
     patch:
       default:
-        enabled: yes
-        target: 90%
-        paths:
-          - api
-          - sdk
+        target: 80%

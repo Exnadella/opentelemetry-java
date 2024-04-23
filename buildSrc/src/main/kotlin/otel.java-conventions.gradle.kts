@@ -8,10 +8,10 @@ plugins {
   eclipse
   idea
 
-  id("com.diffplug.spotless")
-
   id("otel.errorprone-conventions")
   id("otel.jacoco-conventions")
+  id("otel.spotless-conventions")
+  id("org.owasp.dependencycheck")
 }
 
 val otelJava = extensions.create<OtelJavaExtension>("otelJava")
@@ -20,13 +20,13 @@ base {
   // May be set already by a parent project, only set if not.
   // TODO(anuraaga): Make this less hacky by creating a "module group" plugin.
   if (!archivesName.get().startsWith("opentelemetry-")) {
-    archivesName.set("opentelemetry-${name}")
+    archivesName.set("opentelemetry-$name")
   }
 }
 
 java {
   toolchain {
-    languageVersion.set(JavaLanguageVersion.of(11))
+    languageVersion.set(JavaLanguageVersion.of(17))
   }
 
   withJavadocJar()
@@ -35,9 +35,30 @@ java {
 
 checkstyle {
   configDirectory.set(file("$rootDir/buildscripts/"))
-  toolVersion = "8.12"
+  toolVersion = "10.15.0"
   isIgnoreFailures = false
   configProperties["rootDir"] = rootDir
+}
+
+dependencyCheck {
+  skipConfigurations = mutableListOf(
+    "errorprone",
+    "checkstyle",
+    "annotationProcessor",
+    "java9AnnotationProcessor",
+    "moduleAnnotationProcessor",
+    "testAnnotationProcessor",
+    "testJpmsAnnotationProcessor",
+    "animalsniffer",
+    "spotless996155815", // spotless996155815 is a weird configuration that's only added in jaeger-proto, jaeger-remote-sampler
+    "js2p",
+    "jmhAnnotationProcessor",
+    "jmhBasedTestAnnotationProcessor",
+    "jmhCompileClasspath",
+    "jmhRuntimeClasspath",
+    "jmhRuntimeOnly")
+  failBuildOnCVSS = 7.0f // fail on high or critical CVE
+  analyzers.assemblyEnabled = false // not sure why its trying to analyze .NET assemblies
 }
 
 val testJavaVersion = gradle.startParameter.projectProperties.get("testJavaVersion")?.let(JavaVersion::toVersion)
@@ -48,25 +69,22 @@ tasks {
       release.set(8)
 
       if (name != "jmhCompileGeneratedClasses") {
-        compilerArgs.addAll(listOf(
-          "-Xlint:all",
-          // We suppress the "try" warning because it disallows managing an auto-closeable with
-          // try-with-resources without referencing the auto-closeable within the try block.
-          "-Xlint:-try",
-          // We suppress the "processing" warning as suggested in
-          // https://groups.google.com/forum/#!topic/bazel-discuss/_R3A9TJSoPM
-          "-Xlint:-processing",
-          // We suppress the "options" warning because it prevents compilation on modern JDKs
-          "-Xlint:-options",
+        compilerArgs.addAll(
+          listOf(
+            "-Xlint:all",
+            // We suppress the "try" warning because it disallows managing an auto-closeable with
+            // try-with-resources without referencing the auto-closeable within the try block.
+            "-Xlint:-try",
+            // We suppress the "processing" warning as suggested in
+            // https://groups.google.com/forum/#!topic/bazel-discuss/_R3A9TJSoPM
+            "-Xlint:-processing",
+            // We suppress the "options" warning because it prevents compilation on modern JDKs
+            "-Xlint:-options",
 
-          // Fail build on any warning
-          "-Werror"
-        ))
-      }
-
-      //disable deprecation warnings for the protobuf module
-      if (project.name == "proto") {
-        compilerArgs.add("-Xlint:-deprecation")
+            // Fail build on any warning
+            "-Werror",
+          ),
+        )
       }
 
       encoding = "UTF-8"
@@ -82,9 +100,11 @@ tasks {
     useJUnitPlatform()
 
     if (testJavaVersion != null) {
-      javaLauncher.set(javaToolchains.launcherFor {
-        languageVersion.set(JavaLanguageVersion.of(testJavaVersion.majorVersion))
-      })
+      javaLauncher.set(
+        javaToolchains.launcherFor {
+          languageVersion.set(JavaLanguageVersion.of(testJavaVersion.majorVersion))
+        },
+      )
     }
 
     testLogging {
@@ -92,6 +112,8 @@ tasks {
       showExceptions = true
       showCauses = true
       showStackTraces = true
+
+      showStandardStreams = true
     }
     maxHeapSize = "1500m"
   }
@@ -107,7 +129,11 @@ tasks {
 
       addBooleanOption("html5", true)
 
-      links("https://docs.oracle.com/javase/8/docs/api/")
+      // TODO (trask) revisit to see if url is fixed
+      // currently broken because https://docs.oracle.com/javase/8/docs/api/element-list is missing
+      // and redirects
+      // links("https://docs.oracle.com/javase/8/docs/api/")
+
       addBooleanOption("Xdoclint:all,-missing", true)
     }
   }
@@ -121,7 +147,8 @@ tasks {
         "Built-By" to System.getProperty("user.name"),
         "Built-JDK" to System.getProperty("java.version"),
         "Implementation-Title" to project.name,
-        "Implementation-Version" to project.version)
+        "Implementation-Version" to project.version,
+      )
     }
   }
 
@@ -141,7 +168,7 @@ plugins.withId("otel.publish-conventions") {
   tasks {
     register("generateVersionResource") {
       val moduleName = otelJava.moduleName
-      val propertiesDir = moduleName.map { File(buildDir, "generated/properties/${it.replace('.', '/')}") }
+      val propertiesDir = moduleName.map { File(layout.buildDirectory.asFile.get(), "generated/properties/${it.replace('.', '/')}") }
 
       inputs.property("project.version", project.version.toString())
       outputs.dir(propertiesDir)
@@ -154,7 +181,7 @@ plugins.withId("otel.publish-conventions") {
 
   sourceSets {
     main {
-      output.dir("$buildDir/generated/properties", "builtBy" to "generateVersionResource")
+      output.dir("${layout.buildDirectory.asFile.get()}/generated/properties", "builtBy" to "generateVersionResource")
     }
   }
 }
@@ -163,13 +190,6 @@ configurations.configureEach {
   resolutionStrategy {
     failOnVersionConflict()
     preferProjectModules()
-  }
-}
-
-spotless {
-  java {
-    googleJavaFormat("1.9")
-    licenseHeaderFile(rootProject.file("buildscripts/spotless.license.java"), "(package|import|class|// Includes work from:)")
   }
 }
 
@@ -192,28 +212,52 @@ dependencies {
   compileOnly("com.google.auto.value:auto-value-annotations")
   compileOnly("com.google.code.findbugs:jsr305")
 
-  testCompileOnly("com.google.auto.value:auto-value-annotations")
-  testCompileOnly("com.google.errorprone:error_prone_annotations")
-  testCompileOnly("com.google.code.findbugs:jsr305")
-
-  testImplementation("org.junit.jupiter:junit-jupiter-api")
-  testImplementation("org.junit.jupiter:junit-jupiter-params")
-  testImplementation("nl.jqno.equalsverifier:equalsverifier")
-  testImplementation("org.mockito:mockito-core")
-  testImplementation("org.mockito:mockito-junit-jupiter")
-  testImplementation("org.assertj:assertj-core")
-  testImplementation("org.awaitility:awaitility")
-  testImplementation("io.github.netmikey.logunit:logunit-jul")
-
-  testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
-  testRuntimeOnly("org.junit.vintage:junit-vintage-engine")
-
-  errorprone("com.google.errorprone:error_prone_core")
-  errorprone("com.uber.nullaway:nullaway")
-
   annotationProcessor("com.google.guava:guava-beta-checker")
 
   // Workaround for @javax.annotation.Generated
   // see: https://github.com/grpc/grpc-java/issues/3633
   compileOnly("javax.annotation:javax.annotation-api")
+
+  modules {
+    // checkstyle uses the very old google-collections which causes Java 9 module conflict with
+    // guava which is also on the classpath
+    module("com.google.collections:google-collections") {
+      replacedBy("com.google.guava:guava", "google-collections is now part of Guava")
+    }
+  }
+}
+
+testing {
+  suites.withType(JvmTestSuite::class).configureEach {
+    dependencies {
+      implementation(project(project.path))
+
+      implementation(project(":testing-internal"))
+
+      compileOnly("com.google.auto.value:auto-value-annotations")
+      compileOnly("com.google.errorprone:error_prone_annotations")
+      compileOnly("com.google.code.findbugs:jsr305")
+
+      implementation("org.junit.jupiter:junit-jupiter-api")
+      implementation("org.junit.jupiter:junit-jupiter-params")
+      implementation("nl.jqno.equalsverifier:equalsverifier")
+      implementation("org.mockito:mockito-core")
+      implementation("org.mockito:mockito-junit-jupiter")
+      implementation("org.assertj:assertj-core")
+      implementation("org.awaitility:awaitility")
+      implementation("org.junit-pioneer:junit-pioneer")
+      implementation("io.github.netmikey.logunit:logunit-jul")
+
+      runtimeOnly("org.junit.jupiter:junit-jupiter-engine")
+      runtimeOnly("org.slf4j:slf4j-simple")
+    }
+
+    targets {
+      all {
+        testTask.configure {
+          systemProperty("java.util.logging.config.class", "io.opentelemetry.internal.testing.slf4j.JulBridgeInitializer")
+        }
+      }
+    }
+  }
 }

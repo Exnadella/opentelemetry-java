@@ -9,13 +9,12 @@ import java.util.Collection;
 import javax.annotation.concurrent.Immutable;
 
 /**
- * A collection of data points associated to a metric.
+ * A collection of metric {@link PointData}.
  *
- * <p>Loosely equivalent with "Metric" message in OTLP. See:
- * https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md#metric-points
+ * @since 1.14.0
  */
 @Immutable
-interface Data<T extends PointData> {
+public interface Data<T extends PointData> {
   /**
    * Returns the data {@link PointData}s for this metric.
    *

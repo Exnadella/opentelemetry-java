@@ -24,15 +24,13 @@ dependencies {
 
   compileOnly(project(":sdk:trace-shaded-deps"))
 
-  implementation(project(":api:metrics"))
-  implementation(project(":semconv"))
-
   annotationProcessor("com.google.auto.value:auto-value")
 
   testAnnotationProcessor("com.google.auto.value:auto-value")
 
   testImplementation(project(":sdk:testing"))
   testImplementation("com.google.guava:guava")
+  testImplementation("com.google.guava:guava-testlib")
 
   jmh(project(":sdk:metrics"))
   jmh(project(":sdk:testing")) {
@@ -41,9 +39,8 @@ dependencies {
     // dependencies.
     isTransitive = false
   }
-  jmh(project(":exporters:jaeger-thrift"))
-  jmh(project(":exporters:otlp:trace")) {
-    // The opentelemetry-exporter-otlp-trace depends on this project itself. So don"t pull in
+  jmh(project(":exporters:otlp:all")) {
+    // The opentelemetry-exporter-otlp depends on this project itself. So don't pull in
     // the transitive dependencies.
     isTransitive = false
   }
@@ -51,7 +48,7 @@ dependencies {
   jmh(project(":exporters:otlp:common")) {
     isTransitive = false
   }
-  jmh(project(":proto"))
+  jmh("io.opentelemetry.proto:opentelemetry-proto")
 
   jmh("com.google.guava:guava")
   jmh("io.grpc:grpc-api")

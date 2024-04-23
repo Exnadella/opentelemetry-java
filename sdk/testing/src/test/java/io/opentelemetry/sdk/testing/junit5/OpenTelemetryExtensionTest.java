@@ -5,15 +5,21 @@
 
 package io.opentelemetry.sdk.testing.junit5;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static io.opentelemetry.sdk.testing.assertj.OpenTelemetryAssertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.logs.Logger;
+import io.opentelemetry.api.metrics.LongCounter;
+import io.opentelemetry.api.metrics.Meter;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -24,9 +30,11 @@ class OpenTelemetryExtensionTest {
   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
 
   private final Tracer tracer = otelTesting.getOpenTelemetry().getTracer("test");
+  private final Meter meter = otelTesting.getOpenTelemetry().getMeter("test");
+  private final Logger logger = otelTesting.getOpenTelemetry().getLogsBridge().get("test");
 
   @Test
-  public void exportSpan() {
+  public void getSpans() {
     tracer.spanBuilder("test").startSpan().end();
 
     assertThat(otelTesting.getSpans())
@@ -40,7 +48,7 @@ class OpenTelemetryExtensionTest {
 
   // We have two tests to verify spans get cleared up between tests.
   @Test
-  public void exportSpanAgain() {
+  public void getSpansAgain() {
     tracer.spanBuilder("test").startSpan().end();
 
     assertThat(otelTesting.getSpans())
@@ -53,10 +61,10 @@ class OpenTelemetryExtensionTest {
   }
 
   @Test
-  public void exportTraces() {
-    Span span = tracer.spanBuilder("testa1").startSpan();
+  public void assertTraces() {
+    Span span = tracer.spanBuilder("testa1").setStartTimestamp(1000, TimeUnit.SECONDS).startSpan();
     try (Scope ignored = span.makeCurrent()) {
-      tracer.spanBuilder("testa2").startSpan().end();
+      tracer.spanBuilder("testa2").setStartTimestamp(1000, TimeUnit.SECONDS).startSpan().end();
     } finally {
       span.end();
     }
@@ -138,5 +146,88 @@ class OpenTelemetryExtensionTest {
             trace ->
                 trace.hasSpansSatisfyingExactly(
                     s -> s.hasName("testa1"), s -> s.hasName("testa2")));
+  }
+
+  @Test
+  void getMetrics() {
+    LongCounter counter = meter.counterBuilder("counter").build();
+    counter.add(1);
+
+    assertThat(otelTesting.getMetrics())
+        .satisfiesExactlyInAnyOrder(
+            metricData ->
+                assertThat(metricData)
+                    .hasName("counter")
+                    .hasLongSumSatisfying(
+                        sum -> sum.hasPointsSatisfying(point -> point.hasValue(1))));
+  }
+
+  // We have two tests to verify metrics get cleared up between tests.
+  @Test
+  void getMetricsAgain() {
+    LongCounter counter = meter.counterBuilder("counter").build();
+    counter.add(1);
+
+    assertThat(otelTesting.getMetrics())
+        .satisfiesExactlyInAnyOrder(
+            metricData ->
+                assertThat(metricData)
+                    .hasName("counter")
+                    .hasLongSumSatisfying(
+                        sum -> sum.hasPointsSatisfying(point -> point.hasValue(1))));
+  }
+
+  @Test
+  public void getLogRecords() {
+    logger.logRecordBuilder().setBody("body").emit();
+
+    assertThat(otelTesting.getLogRecords())
+        .singleElement()
+        .satisfies(
+            logRecordData -> assertThat(logRecordData.getBody().asString()).isEqualTo("body"));
+    // Logs cleared between tests, not when retrieving
+    assertThat(otelTesting.getLogRecords())
+        .singleElement()
+        .satisfies(
+            logRecordData -> assertThat(logRecordData.getBody().asString()).isEqualTo("body"));
+  }
+
+  // We have two tests to verify spans get cleared up between tests.
+  @Test
+  public void getLogRecordsAgain() {
+    logger.logRecordBuilder().setBody("body").emit();
+
+    assertThat(otelTesting.getLogRecords())
+        .singleElement()
+        .satisfies(
+            logRecordData -> assertThat(logRecordData.getBody().asString()).isEqualTo("body"));
+    // Logs cleared between tests, not when retrieving
+    assertThat(otelTesting.getLogRecords())
+        .singleElement()
+        .satisfies(
+            logRecordData -> assertThat(logRecordData.getBody().asString()).isEqualTo("body"));
+  }
+
+  @Test
+  void afterAll() {
+    // Use a different instance of OpenTelemetryExtension to avoid interfering with other tests
+    OpenTelemetryExtension extension = OpenTelemetryExtension.create();
+    extension.beforeAll(null);
+
+    Meter meter = extension.getOpenTelemetry().getMeter("meter");
+    Tracer tracer = extension.getOpenTelemetry().getTracer("tracer");
+
+    meter.counterBuilder("counter").build().add(10);
+    tracer.spanBuilder("span").startSpan().end();
+    assertThat(extension.getMetrics()).isNotEmpty();
+    assertThat(extension.getSpans()).isNotEmpty();
+
+    extension.afterAll(null);
+    assertThat(GlobalOpenTelemetry.get()).isSameAs(OpenTelemetry.noop());
+
+    meter.counterBuilder("counter").build().add(10);
+    tracer.spanBuilder("span").startSpan().end();
+    assertThat(extension.getMetrics()).isEmpty();
+    assertThat(extension.getSpans()).isEmpty();
   }
 }

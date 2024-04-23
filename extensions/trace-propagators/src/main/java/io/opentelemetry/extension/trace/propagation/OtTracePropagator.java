@@ -20,6 +20,7 @@ import io.opentelemetry.context.propagation.TextMapSetter;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Locale;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
@@ -61,7 +62,7 @@ public final class OtTracePropagator implements TextMapPropagator {
     if (context == null || setter == null) {
       return;
     }
-    final SpanContext spanContext = Span.fromContext(context).getSpanContext();
+    SpanContext spanContext = Span.fromContext(context).getSpanContext();
     if (!spanContext.isValid()) {
       return;
     }
@@ -108,14 +109,17 @@ public final class OtTracePropagator implements TextMapPropagator {
     if (carrier != null) {
       BaggageBuilder baggageBuilder = Baggage.builder();
       for (String key : getter.keys(carrier)) {
-        if (!key.startsWith(PREFIX_BAGGAGE_HEADER)) {
+        String lowercaseKey = key.toLowerCase(Locale.ROOT);
+        if (!lowercaseKey.startsWith(PREFIX_BAGGAGE_HEADER)) {
           continue;
         }
         String value = getter.get(carrier, key);
         if (value == null) {
           continue;
         }
-        baggageBuilder.put(key.replace(OtTracePropagator.PREFIX_BAGGAGE_HEADER, ""), value);
+        String baggageKey =
+            lowercaseKey.substring(OtTracePropagator.PREFIX_BAGGAGE_HEADER.length());
+        baggageBuilder.put(baggageKey, value);
       }
       Baggage baggage = baggageBuilder.build();
       if (!baggage.isEmpty()) {
@@ -126,10 +130,16 @@ public final class OtTracePropagator implements TextMapPropagator {
     return extractedContext;
   }
 
-  static SpanContext buildSpanContext(String traceId, String spanId, String sampled) {
+  private static SpanContext buildSpanContext(
+      @Nullable String traceId, @Nullable String spanId, @Nullable String sampled) {
     if (!Common.isTraceIdValid(traceId) || !Common.isSpanIdValid(spanId)) {
       return SpanContext.getInvalid();
     }
     return Common.buildSpanContext(traceId, spanId, sampled);
+  }
+
+  @Override
+  public String toString() {
+    return "OtTracePropagator";
   }
 }

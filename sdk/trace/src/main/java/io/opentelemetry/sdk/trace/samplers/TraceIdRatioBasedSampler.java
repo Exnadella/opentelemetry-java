@@ -10,7 +10,10 @@ import io.opentelemetry.api.internal.OtelEncodingUtils;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.sdk.trace.data.LinkData;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.List;
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 /**
@@ -51,11 +54,11 @@ final class TraceIdRatioBasedSampler implements Sampler {
 
   TraceIdRatioBasedSampler(double ratio, long idUpperBound) {
     this.idUpperBound = idUpperBound;
-    description = String.format("TraceIdRatioBased{%.6f}", ratio);
+    description = "TraceIdRatioBased{" + decimalFormat(ratio) + "}";
   }
 
   @Override
-  public final SamplingResult shouldSample(
+  public SamplingResult shouldSample(
       Context parentContext,
       String traceId,
       String name,
@@ -76,12 +79,12 @@ final class TraceIdRatioBasedSampler implements Sampler {
   }
 
   @Override
-  public final String getDescription() {
+  public String getDescription() {
     return description;
   }
 
   @Override
-  public boolean equals(Object obj) {
+  public boolean equals(@Nullable Object obj) {
     if (!(obj instanceof TraceIdRatioBasedSampler)) {
       return false;
     }
@@ -95,7 +98,7 @@ final class TraceIdRatioBasedSampler implements Sampler {
   }
 
   @Override
-  public final String toString() {
+  public String toString() {
     return getDescription();
   }
 
@@ -106,5 +109,13 @@ final class TraceIdRatioBasedSampler implements Sampler {
 
   private static long getTraceIdRandomPart(String traceId) {
     return OtelEncodingUtils.longFromBase16String(traceId, 16);
+  }
+
+  private static String decimalFormat(double value) {
+    DecimalFormatSymbols decimalFormatSymbols = DecimalFormatSymbols.getInstance();
+    decimalFormatSymbols.setDecimalSeparator('.');
+
+    DecimalFormat decimalFormat = new DecimalFormat("0.000000", decimalFormatSymbols);
+    return decimalFormat.format(value);
   }
 }

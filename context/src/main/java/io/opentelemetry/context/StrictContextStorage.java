@@ -23,6 +23,7 @@ package io.opentelemetry.context;
 import static java.lang.Thread.currentThread;
 
 import io.opentelemetry.context.internal.shaded.WeakConcurrentMap;
+import java.lang.ref.Reference;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -216,9 +217,9 @@ final class StrictContextStorage implements ContextStorage, AutoCloseable {
     }
   }
 
+  // Don't care about serialization of this private class.
+  @SuppressWarnings("serial")
   static class CallerStackTrace extends Throwable {
-
-    private static final long serialVersionUID = 783294061323215387L;
 
     final String threadName = currentThread().getName();
     final long threadId = currentThread().getId();
@@ -266,7 +267,9 @@ final class StrictContextStorage implements ContextStorage, AutoCloseable {
     public void run() {
       try {
         while (!Thread.interrupted()) {
-          CallerStackTrace caller = map.remove(remove());
+          Reference<? extends Scope> reference = remove();
+          // on openj9 ReferenceQueue.remove can return null
+          CallerStackTrace caller = reference != null ? map.remove(reference) : null;
           if (caller != null && !caller.closed) {
             logger.log(
                 Level.SEVERE, "Scope garbage collected before being closed.", callerError(caller));

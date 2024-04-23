@@ -16,7 +16,8 @@ import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.internal.testing.slf4j.SuppressLogger;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.testing.trace.TestSpanData;
 import io.opentelemetry.sdk.trace.data.EventData;
@@ -25,12 +26,14 @@ import io.opentelemetry.sdk.trace.data.StatusData;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.skyscreamer.jsonassert.JSONAssert;
 import org.slf4j.event.Level;
 
+@SuppressLogger(OtlpJsonLoggingSpanExporter.class)
 class OtlpJsonLoggingSpanExporterTest {
 
   private static final Resource RESOURCE =
@@ -60,7 +63,11 @@ class OtlpJsonLoggingSpanExporterTest {
           .setTotalAttributeCount(2)
           .setTotalRecordedEvents(1)
           .setTotalRecordedLinks(0)
-          .setInstrumentationLibraryInfo(InstrumentationLibraryInfo.create("instrumentation", "1"))
+          .setInstrumentationScopeInfo(
+              InstrumentationScopeInfo.builder("instrumentation")
+                  .setVersion("1")
+                  .setAttributes(Attributes.builder().put("key", "value").build())
+                  .build())
           .setResource(RESOURCE)
           .build();
 
@@ -79,7 +86,8 @@ class OtlpJsonLoggingSpanExporterTest {
           .setName("testSpan2")
           .setKind(SpanKind.CLIENT)
           .setResource(RESOURCE)
-          .setInstrumentationLibraryInfo(InstrumentationLibraryInfo.create("instrumentation2", "2"))
+          .setInstrumentationScopeInfo(
+              InstrumentationScopeInfo.builder("instrumentation2").setVersion("2").build())
           .build();
 
   @RegisterExtension
@@ -99,6 +107,7 @@ class OtlpJsonLoggingSpanExporterTest {
     assertThat(logs.getEvents())
         .hasSize(1)
         .allSatisfy(log -> assertThat(log.getLevel()).isEqualTo(Level.INFO));
+    String message = logs.getEvents().get(0).getMessage();
     JSONAssert.assertEquals(
         "{"
             + "  \"resource\": {"
@@ -109,8 +118,8 @@ class OtlpJsonLoggingSpanExporterTest {
             + "      }"
             + "    }]"
             + "  },"
-            + "  \"instrumentationLibrarySpans\": [{"
-            + "    \"instrumentationLibrary\": {"
+            + "  \"scopeSpans\": [{"
+            + "    \"scope\": {"
             + "      \"name\": \"instrumentation2\","
             + "      \"version\": \"2\""
             + "    },"
@@ -118,24 +127,29 @@ class OtlpJsonLoggingSpanExporterTest {
             + "      \"traceId\": \"12340000000043211234000000004321\","
             + "      \"spanId\": \"8765000000005678\","
             + "      \"name\": \"testSpan2\","
-            + "      \"kind\": \"SPAN_KIND_CLIENT\","
+            + "      \"kind\": 3,"
             + "      \"startTimeUnixNano\": \"500\","
             + "      \"endTimeUnixNano\": \"1501\","
             + "      \"status\": {"
-            + "        \"deprecatedCode\": \"DEPRECATED_STATUS_CODE_UNKNOWN_ERROR\","
-            + "        \"code\": \"STATUS_CODE_ERROR\""
+            + "        \"code\": 2"
             + "      }"
             + "    }]"
             + "  }, {"
-            + "    \"instrumentationLibrary\": {"
+            + "    \"scope\": {"
             + "      \"name\": \"instrumentation\","
-            + "      \"version\": \"1\""
+            + "      \"version\": \"1\","
+            + "      \"attributes\":[{"
+            + "        \"key\":\"key\","
+            + "        \"value\":{"
+            + "          \"stringValue\":\"value\""
+            + "        }"
+            + "      }]"
             + "    },"
             + "    \"spans\": [{"
             + "      \"traceId\": \"12345678876543211234567887654321\","
             + "      \"spanId\": \"8765432112345678\","
             + "      \"name\": \"testSpan1\","
-            + "      \"kind\": \"SPAN_KIND_INTERNAL\","
+            + "      \"kind\": 1,"
             + "      \"startTimeUnixNano\": \"100\","
             + "      \"endTimeUnixNano\": \"1100\","
             + "      \"attributes\": [{"
@@ -160,14 +174,14 @@ class OtlpJsonLoggingSpanExporterTest {
             + "        }]"
             + "      }],"
             + "      \"status\": {"
-            + "        \"code\": \"STATUS_CODE_OK\""
+            + "        \"code\": 1"
             + "      }"
             + "    }]"
             + "  }]"
             + "}",
-        logs.getEvents().get(0).getMessage(),
-        /* strict= */ true);
-    assertThat(logs.getEvents().get(0).getMessage()).doesNotContain("\n");
+        message,
+        /* strict= */ false);
+    assertThat(message).doesNotContain("\n");
   }
 
   @Test
@@ -178,5 +192,14 @@ class OtlpJsonLoggingSpanExporterTest {
   @Test
   void shutdown() {
     assertThat(exporter.shutdown().isSuccess()).isTrue();
+    assertThat(
+            exporter
+                .export(Collections.singletonList(SPAN1))
+                .join(10, TimeUnit.SECONDS)
+                .isSuccess())
+        .isFalse();
+    assertThat(logs.getEvents()).isEmpty();
+    assertThat(exporter.shutdown().isSuccess()).isTrue();
+    logs.assertContains("Calling shutdown() multiple times.");
   }
 }

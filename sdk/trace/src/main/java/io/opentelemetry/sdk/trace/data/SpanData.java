@@ -8,7 +8,8 @@ package io.opentelemetry.sdk.trace.data;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.internal.InstrumentationScopeUtil;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SpanLimits;
 import java.util.List;
@@ -153,9 +154,21 @@ public interface SpanData {
    * Returns the instrumentation library specified when creating the tracer which produced this
    * {@code Span}.
    *
-   * @return an instance of {@link InstrumentationLibraryInfo}
+   * @return an instance of {@link io.opentelemetry.sdk.common.InstrumentationLibraryInfo}
+   * @deprecated Use {@link #getInstrumentationScopeInfo()}.
    */
-  InstrumentationLibraryInfo getInstrumentationLibraryInfo();
+  @Deprecated
+  io.opentelemetry.sdk.common.InstrumentationLibraryInfo getInstrumentationLibraryInfo();
+
+  /**
+   * Returns the instrumentation scope specified when creating the tracer which produced this {@code
+   * Span}.
+   *
+   * @return an instance of {@link InstrumentationScopeInfo}
+   */
+  default InstrumentationScopeInfo getInstrumentationScopeInfo() {
+    return InstrumentationScopeUtil.toInstrumentationScopeInfo(getInstrumentationLibraryInfo());
+  }
 
   /**
    * Returns the resource of this {@code Span}.

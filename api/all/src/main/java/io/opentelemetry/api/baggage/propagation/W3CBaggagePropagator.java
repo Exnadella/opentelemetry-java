@@ -9,6 +9,9 @@ import static java.util.Collections.singletonList;
 
 import io.opentelemetry.api.baggage.Baggage;
 import io.opentelemetry.api.baggage.BaggageBuilder;
+import io.opentelemetry.api.baggage.BaggageEntry;
+import io.opentelemetry.api.internal.PercentEscaper;
+import io.opentelemetry.api.internal.StringUtils;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
@@ -25,6 +28,7 @@ public final class W3CBaggagePropagator implements TextMapPropagator {
   private static final String FIELD = "baggage";
   private static final List<String> FIELDS = singletonList(FIELD);
   private static final W3CBaggagePropagator INSTANCE = new W3CBaggagePropagator();
+  private static final PercentEscaper URL_ESCAPER = PercentEscaper.create();
 
   /** Singleton instance of the W3C Baggage Propagator. */
   public static W3CBaggagePropagator getInstance() {
@@ -47,20 +51,39 @@ public final class W3CBaggagePropagator implements TextMapPropagator {
     if (baggage.isEmpty()) {
       return;
     }
+    String headerContent = baggageToString(baggage);
+
+    if (!headerContent.isEmpty()) {
+      setter.set(carrier, FIELD, headerContent);
+    }
+  }
+
+  private static String baggageToString(Baggage baggage) {
     StringBuilder headerContent = new StringBuilder();
     baggage.forEach(
         (key, baggageEntry) -> {
-          headerContent.append(key).append("=").append(baggageEntry.getValue());
+          if (baggageIsInvalid(key, baggageEntry)) {
+            return;
+          }
+          headerContent.append(key).append("=").append(encodeValue(baggageEntry.getValue()));
           String metadataValue = baggageEntry.getMetadata().getValue();
           if (metadataValue != null && !metadataValue.isEmpty()) {
-            headerContent.append(";").append(metadataValue);
+            headerContent.append(";").append(encodeValue(metadataValue));
           }
           headerContent.append(",");
         });
-    if (headerContent.length() > 0) {
-      headerContent.setLength(headerContent.length() - 1);
-      setter.set(carrier, FIELD, headerContent.toString());
+
+    if (headerContent.length() == 0) {
+      return "";
     }
+
+    // Trim trailing comma
+    headerContent.setLength(headerContent.length() - 1);
+    return headerContent.toString();
+  }
+
+  private static String encodeValue(String value) {
+    return URL_ESCAPER.escape(value);
   }
 
   @Override
@@ -91,5 +114,34 @@ public final class W3CBaggagePropagator implements TextMapPropagator {
 
   private static void extractEntries(String baggageHeader, BaggageBuilder baggageBuilder) {
     new Parser(baggageHeader).parseInto(baggageBuilder);
+  }
+
+  private static boolean baggageIsInvalid(String key, BaggageEntry baggageEntry) {
+    return !isValidBaggageKey(key) || !isValidBaggageValue(baggageEntry.getValue());
+  }
+
+  /**
+   * Determines whether the given {@code String} is a valid entry key.
+   *
+   * @param name the entry key name to be validated.
+   * @return whether the name is valid.
+   */
+  private static boolean isValidBaggageKey(String name) {
+    return name != null && !name.isEmpty() && StringUtils.isPrintableString(name);
+  }
+
+  /**
+   * Determines whether the given {@code String} is a valid entry value.
+   *
+   * @param value the entry value to be validated.
+   * @return whether the value is valid.
+   */
+  private static boolean isValidBaggageValue(String value) {
+    return value != null;
+  }
+
+  @Override
+  public String toString() {
+    return "W3CBaggagePropagator";
   }
 }

@@ -24,18 +24,23 @@ import javax.annotation.concurrent.Immutable;
  * of being "empty", you'll need to remove them before calling the constructor, assuming you don't
  * want the "empty" keys to be kept in your collection.
  *
+ * <p>This class is internal and is hence not for public use. Its APIs are unstable and can change
+ * at any time.
+ *
  * @param <V> The type of the values contained in this.
  */
 @Immutable
 public abstract class ImmutableKeyValuePairs<K, V> {
   private final Object[] data;
+  private int hashcode;
 
   /**
-   * Sorts and dedupes the key/value pairs in {@code data}. {@code null} values will be removed.
-   * Keys must be {@link Comparable}.
+   * Stores the raw object data directly. Does not do any de-duping or sorting. If you use this
+   * constructor, you *must* guarantee that the data has been de-duped and sorted by key before it
+   * is passed here.
    */
   protected ImmutableKeyValuePairs(Object[] data) {
-    this(data, Comparator.naturalOrder());
+    this.data = data;
   }
 
   /**
@@ -43,7 +48,7 @@ public abstract class ImmutableKeyValuePairs<K, V> {
    * Keys will be compared with the given {@link Comparator}.
    */
   protected ImmutableKeyValuePairs(Object[] data, Comparator<?> keyComparator) {
-    this.data = sortAndFilter(data, keyComparator);
+    this(sortAndFilter(data, keyComparator));
   }
 
   // TODO: Improve this to avoid one allocation, for the moment only some Builders and the asMap
@@ -207,6 +212,12 @@ public abstract class ImmutableKeyValuePairs<K, V> {
       // Skip entries with null value, we do it here because we want them to overwrite and remove
       // entries with same key that we already added.
       if (value == null) {
+        // When the value is null, there are two cases:
+        // 1. next key is the same as the current one, it may cause ArrayIndexOutOfBoundsException,
+        // so we reset the previous key to null to avoid this
+        // 2. next key is different than the current one; In this case, whether the previous key is
+        // null or not will have no impact.
+        previousKey = null;
         continue;
       }
       previousKey = key;
@@ -224,7 +235,7 @@ public abstract class ImmutableKeyValuePairs<K, V> {
   }
 
   @Override
-  public boolean equals(Object o) {
+  public boolean equals(@Nullable Object o) {
     if (this == o) {
       return true;
     }
@@ -237,15 +248,19 @@ public abstract class ImmutableKeyValuePairs<K, V> {
 
   @Override
   public int hashCode() {
-    int result = 1;
-    result *= 1000003;
-    result ^= Arrays.hashCode(data);
+    int result = hashcode;
+    if (result == 0) {
+      result = 1;
+      result *= 1000003;
+      result ^= Arrays.hashCode(data);
+      hashcode = result;
+    }
     return result;
   }
 
   @Override
   public String toString() {
-    final StringBuilder sb = new StringBuilder("{");
+    StringBuilder sb = new StringBuilder("{");
     for (int i = 0; i < data.length; i += 2) {
       // Quote string values
       Object value = data[i + 1];

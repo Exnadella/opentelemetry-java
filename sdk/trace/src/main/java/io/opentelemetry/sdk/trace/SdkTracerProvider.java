@@ -5,14 +5,16 @@
 
 package io.opentelemetry.sdk.trace;
 
-import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.api.trace.TracerBuilder;
 import io.opentelemetry.api.trace.TracerProvider;
 import io.opentelemetry.sdk.common.Clock;
 import io.opentelemetry.sdk.common.CompletableResultCode;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
 import io.opentelemetry.sdk.internal.ComponentRegistry;
+import io.opentelemetry.sdk.internal.ScopeConfigurator;
 import io.opentelemetry.sdk.resources.Resource;
+import io.opentelemetry.sdk.trace.internal.TracerConfig;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
 import java.io.Closeable;
 import java.util.List;
@@ -22,18 +24,13 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
-/**
- * {@code Tracer} provider implementation for {@link TracerProvider}.
- *
- * <p>This class is not intended to be used in application code and it is used only by {@link
- * OpenTelemetry}. However, if you need a custom implementation of the factory, you can create one
- * as needed.
- */
+/** SDK implementation for {@link TracerProvider}. */
 public final class SdkTracerProvider implements TracerProvider, Closeable {
   private static final Logger logger = Logger.getLogger(SdkTracerProvider.class.getName());
   static final String DEFAULT_TRACER_NAME = "";
   private final TracerSharedState sharedState;
   private final ComponentRegistry<SdkTracer> tracerSdkComponentRegistry;
+  private final ScopeConfigurator<TracerConfig> tracerConfigurator;
 
   /**
    * Returns a new {@link SdkTracerProviderBuilder} for {@link SdkTracerProvider}.
@@ -44,41 +41,53 @@ public final class SdkTracerProvider implements TracerProvider, Closeable {
     return new SdkTracerProviderBuilder();
   }
 
+  @SuppressWarnings("NonApiType")
   SdkTracerProvider(
       Clock clock,
       IdGenerator idsGenerator,
       Resource resource,
       Supplier<SpanLimits> spanLimitsSupplier,
       Sampler sampler,
-      List<SpanProcessor> spanProcessors) {
+      List<SpanProcessor> spanProcessors,
+      ScopeConfigurator<TracerConfig> tracerConfigurator) {
     this.sharedState =
         new TracerSharedState(
             clock, idsGenerator, resource, spanLimitsSupplier, sampler, spanProcessors);
     this.tracerSdkComponentRegistry =
         new ComponentRegistry<>(
-            instrumentationLibraryInfo -> new SdkTracer(sharedState, instrumentationLibraryInfo));
+            instrumentationScopeInfo ->
+                new SdkTracer(
+                    sharedState,
+                    instrumentationScopeInfo,
+                    getTracerConfig(instrumentationScopeInfo)));
+    this.tracerConfigurator = tracerConfigurator;
+  }
+
+  private TracerConfig getTracerConfig(InstrumentationScopeInfo instrumentationScopeInfo) {
+    TracerConfig tracerConfig = tracerConfigurator.apply(instrumentationScopeInfo);
+    return tracerConfig == null ? TracerConfig.defaultConfig() : tracerConfig;
   }
 
   @Override
-  public Tracer get(String instrumentationName) {
-    return tracerBuilder(instrumentationName).build();
+  public Tracer get(String instrumentationScopeName) {
+    return tracerBuilder(instrumentationScopeName).build();
   }
 
   @Override
-  public Tracer get(String instrumentationName, String instrumentationVersion) {
-    return tracerBuilder(instrumentationName)
-        .setInstrumentationVersion(instrumentationVersion)
+  public Tracer get(String instrumentationScopeName, String instrumentationScopeVersion) {
+    return tracerBuilder(instrumentationScopeName)
+        .setInstrumentationVersion(instrumentationScopeVersion)
         .build();
   }
 
   @Override
-  public TracerBuilder tracerBuilder(@Nullable String instrumentationName) {
+  public TracerBuilder tracerBuilder(@Nullable String instrumentationScopeName) {
     // Per the spec, both null and empty are "invalid" and a default value should be used.
-    if (instrumentationName == null || instrumentationName.isEmpty()) {
-      logger.fine("Tracer requested without instrumentation name.");
-      instrumentationName = DEFAULT_TRACER_NAME;
+    if (instrumentationScopeName == null || instrumentationScopeName.isEmpty()) {
+      logger.fine("Tracer requested without instrumentation scope name.");
+      instrumentationScopeName = DEFAULT_TRACER_NAME;
     }
-    return new SdkTracerBuilder(tracerSdkComponentRegistry, instrumentationName);
+    return new SdkTracerBuilder(tracerSdkComponentRegistry, instrumentationScopeName);
   }
 
   /** Returns the {@link SpanLimits} that are currently applied to created spans. */
@@ -92,7 +101,7 @@ public final class SdkTracerProvider implements TracerProvider, Closeable {
   }
 
   /**
-   * Attempts to stop all the activity for this {@link Tracer}. Calls {@link
+   * Attempts to stop all the activity for {@link Tracer}s created by this provider. Calls {@link
    * SpanProcessor#shutdown()} for all registered {@link SpanProcessor}s.
    *
    * <p>The returned {@link CompletableResultCode} will be completed when all the Spans are
@@ -100,16 +109,15 @@ public final class SdkTracerProvider implements TracerProvider, Closeable {
    *
    * <p>After this is called, newly created {@code Span}s will be no-ops.
    *
-   * <p>After this is called, further attempts at re-using or reconfiguring this instance will
-   * result in undefined behavior. It should be considered a terminal operation for the SDK
-   * implementation.
+   * <p>After this is called, further attempts at re-using this instance will result in undefined
+   * behavior. It should be considered a terminal operation for the SDK.
    *
    * @return a {@link CompletableResultCode} which is completed when all the span processors have
    *     been shut down.
    */
   public CompletableResultCode shutdown() {
     if (sharedState.hasBeenShutdown()) {
-      logger.log(Level.WARNING, "Calling shutdown() multiple times.");
+      logger.log(Level.INFO, "Calling shutdown() multiple times.");
       return CompletableResultCode.ofSuccess();
     }
     return sharedState.shutdown();
@@ -126,7 +134,7 @@ public final class SdkTracerProvider implements TracerProvider, Closeable {
   }
 
   /**
-   * Attempts to stop all the activity for this {@link Tracer}. Calls {@link
+   * Attempts to stop all the activity for {@link Tracer}s created by this provider. Calls {@link
    * SpanProcessor#shutdown()} for all registered {@link SpanProcessor}s.
    *
    * <p>This operation may block until all the Spans are processed. Must be called before turning
@@ -134,12 +142,29 @@ public final class SdkTracerProvider implements TracerProvider, Closeable {
    *
    * <p>After this is called, newly created {@code Span}s will be no-ops.
    *
-   * <p>After this is called, further attempts at re-using or reconfiguring this instance will
-   * result in undefined behavior. It should be considered a terminal operation for the SDK
-   * implementation.
+   * <p>After this is called, further attempts at re-using this instance will result in undefined
+   * behavior. It should be considered a terminal operation for the SDK.
    */
   @Override
   public void close() {
     shutdown().join(10, TimeUnit.SECONDS);
+  }
+
+  @Override
+  public String toString() {
+    return "SdkTracerProvider{"
+        + "clock="
+        + sharedState.getClock()
+        + ", idGenerator="
+        + sharedState.getIdGenerator()
+        + ", resource="
+        + sharedState.getResource()
+        + ", spanLimitsSupplier="
+        + sharedState.getSpanLimits()
+        + ", sampler="
+        + sharedState.getSampler()
+        + ", spanProcessor="
+        + sharedState.getActiveSpanProcessor()
+        + '}';
   }
 }

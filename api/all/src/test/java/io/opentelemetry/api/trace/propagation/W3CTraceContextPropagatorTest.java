@@ -76,7 +76,7 @@ class W3CTraceContextPropagatorTest {
 
   @Test
   void inject_NullCarrierUsage() {
-    final Map<String, String> carrier = new LinkedHashMap<>();
+    Map<String, String> carrier = new LinkedHashMap<>();
     Context context =
         withSpanContext(
             SpanContext.create(
@@ -526,6 +526,11 @@ class W3CTraceContextPropagatorTest {
             Context.current());
     assertThat(w3cTraceContextPropagator.extract(context, Collections.emptyMap(), null))
         .isSameAs(context);
+  }
+
+  @Test
+  void toString_Valid() {
+    assertThat(w3cTraceContextPropagator.toString()).isEqualTo("W3CTraceContextPropagator");
   }
 
   // Tests transplanted from the w3c test suite

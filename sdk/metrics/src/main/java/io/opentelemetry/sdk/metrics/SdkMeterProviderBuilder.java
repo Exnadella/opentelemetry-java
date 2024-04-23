@@ -5,26 +5,48 @@
 
 package io.opentelemetry.sdk.metrics;
 
-import io.opentelemetry.api.metrics.GlobalMeterProvider;
 import io.opentelemetry.sdk.common.Clock;
-import io.opentelemetry.sdk.metrics.internal.view.ViewRegistry;
-import io.opentelemetry.sdk.metrics.internal.view.ViewRegistryBuilder;
-import io.opentelemetry.sdk.metrics.view.InstrumentSelector;
-import io.opentelemetry.sdk.metrics.view.View;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.internal.ScopeConfigurator;
+import io.opentelemetry.sdk.internal.ScopeConfiguratorBuilder;
+import io.opentelemetry.sdk.metrics.export.MetricProducer;
+import io.opentelemetry.sdk.metrics.export.MetricReader;
+import io.opentelemetry.sdk.metrics.internal.MeterConfig;
+import io.opentelemetry.sdk.metrics.internal.SdkMeterProviderUtil;
+import io.opentelemetry.sdk.metrics.internal.debug.SourceInfo;
+import io.opentelemetry.sdk.metrics.internal.exemplar.ExemplarFilter;
+import io.opentelemetry.sdk.metrics.internal.export.CardinalityLimitSelector;
+import io.opentelemetry.sdk.metrics.internal.view.RegisteredView;
 import io.opentelemetry.sdk.resources.Resource;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Objects;
+import java.util.function.Predicate;
 
 /**
- * Builder class for the {@link SdkMeterProvider}. Has fully functional default implementations of
- * all three required interfaces.
+ * Builder class for the {@link SdkMeterProvider}.
+ *
+ * @since 1.14.0
  */
 public final class SdkMeterProviderBuilder {
 
+  /**
+   * By default, the exemplar filter is set to sample with traces.
+   *
+   * @see #setExemplarFilter(ExemplarFilter)
+   */
+  private static final ExemplarFilter DEFAULT_EXEMPLAR_FILTER = ExemplarFilter.traceBased();
+
   private Clock clock = Clock.getDefault();
   private Resource resource = Resource.getDefault();
-  private final Map<InstrumentSelector, View> instrumentSelectorViews = new HashMap<>();
+  private final IdentityHashMap<MetricReader, CardinalityLimitSelector> metricReaders =
+      new IdentityHashMap<>();
+  private final List<MetricProducer> metricProducers = new ArrayList<>();
+  private final List<RegisteredView> registeredViews = new ArrayList<>();
+  private ExemplarFilter exemplarFilter = DEFAULT_EXEMPLAR_FILTER;
+  private ScopeConfiguratorBuilder<MeterConfig> meterConfiguratorBuilder =
+      MeterConfig.configuratorBuilder();
 
   SdkMeterProviderBuilder() {}
 
@@ -32,7 +54,6 @@ public final class SdkMeterProviderBuilder {
    * Assign a {@link Clock}.
    *
    * @param clock The clock to use for all temporal needs.
-   * @return this
    */
   public SdkMeterProviderBuilder setClock(Clock clock) {
     Objects.requireNonNull(clock, "clock");
@@ -40,12 +61,7 @@ public final class SdkMeterProviderBuilder {
     return this;
   }
 
-  /**
-   * Assign a {@link Resource} to be attached to all Spans created by Tracers.
-   *
-   * @param resource A Resource implementation.
-   * @return this
-   */
+  /** Assign a {@link Resource} to be attached to all metrics. */
   public SdkMeterProviderBuilder setResource(Resource resource) {
     Objects.requireNonNull(resource, "resource");
     this.resource = resource;
@@ -53,63 +69,136 @@ public final class SdkMeterProviderBuilder {
   }
 
   /**
-   * Register a view with the given {@link InstrumentSelector}.
+   * Merge a {@link Resource} with the current.
    *
-   * <p>Example on how to register a view:
+   * @param resource {@link Resource} to merge with current.
+   * @since 1.29.0
+   */
+  public SdkMeterProviderBuilder addResource(Resource resource) {
+    Objects.requireNonNull(resource, "resource");
+    this.resource = this.resource.merge(resource);
+    return this;
+  }
+
+  /**
+   * Assign an {@link ExemplarFilter} for all metrics created by Meters.
+   *
+   * <p>Note: not currently stable but available for experimental use via {@link
+   * SdkMeterProviderUtil#setExemplarFilter(SdkMeterProviderBuilder, ExemplarFilter)}.
+   */
+  SdkMeterProviderBuilder setExemplarFilter(ExemplarFilter filter) {
+    this.exemplarFilter = filter;
+    return this;
+  }
+
+  /**
+   * Register a {@link View}.
+   *
+   * <p>The {@code view} influences how instruments which match the {@code selector} are aggregated
+   * and exported.
+   *
+   * <p>For example, the following code registers a view which changes all histogram instruments to
+   * aggregate with bucket boundaries different from the default:
    *
    * <pre>{@code
    * // create a SdkMeterProviderBuilder
    * SdkMeterProviderBuilder meterProviderBuilder = SdkMeterProvider.builder();
    *
-   * // create a selector to select which instruments to customize:
-   * InstrumentSelector instrumentSelector = InstrumentSelector.builder()
-   *   .setInstrumentType(InstrumentType.COUNTER)
-   *   .build();
-   *
-   * // create a specification of how you want the metrics aggregated:
-   * AggregatorFactory aggregatorFactory = AggregatorFactory.minMaxSumCount();
-   *
    * // register the view with the SdkMeterProviderBuilder
-   * meterProviderBuilder.registerView(instrumentSelector, View.builder()
-   *   .setAggregatorFactory(aggregatorFactory).build());
+   * meterProviderBuilder.registerView(
+   *   InstrumentSelector.builder()
+   *       .setType(InstrumentType.HISTOGRAM)
+   *       .build(),
+   *   View.builder()
+   *       .setAggregation(
+   *           Aggregation.explicitBucketHistogram(Arrays.asList(10d, 20d, 30d, 40d, 50d)))
+   *       .build());
    * }</pre>
-   *
-   * @since 1.1.0
    */
   public SdkMeterProviderBuilder registerView(InstrumentSelector selector, View view) {
     Objects.requireNonNull(selector, "selector");
     Objects.requireNonNull(view, "view");
-    instrumentSelectorViews.put(selector, view);
+    registeredViews.add(
+        RegisteredView.create(
+            selector,
+            view,
+            view.getAttributesProcessor(),
+            view.getCardinalityLimit(),
+            SourceInfo.fromCurrentStack()));
+    return this;
+  }
+
+  /** Registers a {@link MetricReader}. */
+  public SdkMeterProviderBuilder registerMetricReader(MetricReader reader) {
+    metricReaders.put(reader, CardinalityLimitSelector.defaultCardinalityLimitSelector());
     return this;
   }
 
   /**
-   * Returns a new {@link SdkMeterProvider} built with the configuration of this {@link
-   * SdkMeterProviderBuilder} and registers it as the global {@link
-   * io.opentelemetry.api.metrics.MeterProvider}.
+   * Registers a {@link MetricReader} with a {@link CardinalityLimitSelector}.
    *
-   * @see GlobalMeterProvider
+   * <p>Note: not currently stable but available for experimental use via {@link
+   * SdkMeterProviderUtil#registerMetricReaderWithCardinalitySelector(SdkMeterProviderBuilder,
+   * MetricReader, CardinalityLimitSelector)}.
    */
-  public SdkMeterProvider buildAndRegisterGlobal() {
-    SdkMeterProvider meterProvider = build();
-    GlobalMeterProvider.set(meterProvider);
-    return meterProvider;
+  SdkMeterProviderBuilder registerMetricReader(
+      MetricReader reader, CardinalityLimitSelector cardinalityLimitSelector) {
+    metricReaders.put(reader, cardinalityLimitSelector);
+    return this;
   }
 
   /**
-   * Returns a new {@link SdkMeterProvider} built with the configuration of this {@link
-   * SdkMeterProviderBuilder}. This provider is not registered as the global {@link
-   * io.opentelemetry.api.metrics.MeterProvider}. It is recommended that you register one provider
-   * using {@link SdkMeterProviderBuilder#buildAndRegisterGlobal()} for use by instrumentation when
-   * that requires access to a global instance of {@link
-   * io.opentelemetry.api.metrics.MeterProvider}.
+   * Registers a {@link MetricProducer}.
    *
-   * @see GlobalMeterProvider
+   * @since 1.31.0
    */
+  public SdkMeterProviderBuilder registerMetricProducer(MetricProducer metricProducer) {
+    metricProducers.add(metricProducer);
+    return this;
+  }
+
+  /**
+   * Set the meter configurator, which computes {@link MeterConfig} for each {@link
+   * InstrumentationScopeInfo}.
+   *
+   * <p>Overrides any matchers added via {@link #addMeterConfiguratorCondition(Predicate,
+   * MeterConfig)}.
+   *
+   * @see MeterConfig#configuratorBuilder()
+   */
+  SdkMeterProviderBuilder setMeterConfigurator(ScopeConfigurator<MeterConfig> meterConfigurator) {
+    this.meterConfiguratorBuilder = meterConfigurator.toBuilder();
+    return this;
+  }
+
+  /**
+   * Adds a condition to the meter configurator, which computes {@link MeterConfig} for each {@link
+   * InstrumentationScopeInfo}.
+   *
+   * <p>Applies after any previously added conditions.
+   *
+   * <p>If {@link #setMeterConfigurator(ScopeConfigurator)} was previously called, this condition
+   * will only be applied if the {@link ScopeConfigurator#apply(Object)} returns null for the
+   * matched {@link InstrumentationScopeInfo}(s).
+   *
+   * @see ScopeConfiguratorBuilder#nameEquals(String)
+   * @see ScopeConfiguratorBuilder#nameMatchesGlob(String)
+   */
+  SdkMeterProviderBuilder addMeterConfiguratorCondition(
+      Predicate<InstrumentationScopeInfo> scopeMatcher, MeterConfig meterConfig) {
+    this.meterConfiguratorBuilder.addCondition(scopeMatcher, meterConfig);
+    return this;
+  }
+
+  /** Returns an {@link SdkMeterProvider} built with the configuration of this builder. */
   public SdkMeterProvider build() {
-    ViewRegistryBuilder viewRegistryBuilder = ViewRegistry.builder();
-    instrumentSelectorViews.forEach(viewRegistryBuilder::addView);
-    ViewRegistry viewRegistry = viewRegistryBuilder.build();
-    return new SdkMeterProvider(clock, resource, viewRegistry);
+    return new SdkMeterProvider(
+        registeredViews,
+        metricReaders,
+        metricProducers,
+        clock,
+        resource,
+        exemplarFilter,
+        meterConfiguratorBuilder.build());
   }
 }

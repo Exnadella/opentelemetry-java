@@ -136,6 +136,17 @@ class W3CBaggagePropagatorTest {
   }
 
   @Test
+  void extract_value_urlEncoding() {
+    W3CBaggagePropagator propagator = W3CBaggagePropagator.getInstance();
+
+    Context result =
+        propagator.extract(Context.root(), ImmutableMap.of("baggage", "key=value%201"), getter);
+
+    Baggage expectedBaggage = Baggage.builder().put("key", "value 1").build();
+    assertThat(Baggage.fromContext(result)).isEqualTo(expectedBaggage);
+  }
+
+  @Test
   void extract_value_trailingSpaces() {
     W3CBaggagePropagator propagator = W3CBaggagePropagator.getInstance();
 
@@ -432,7 +443,11 @@ class W3CBaggagePropagatorTest {
     Baggage baggage =
         Baggage.builder()
             .put("nometa", "nometa-value")
+            .put("needsEncoding", "blah blah blah")
             .put("meta", "meta-value", BaggageEntryMetadata.create("somemetadata; someother=foo"))
+            .put("\2ab\3cd", "wacky key nonprintable")
+            .put(null, "null key")
+            .put("nullvalue", null)
             .build();
     W3CBaggagePropagator propagator = W3CBaggagePropagator.getInstance();
     Map<String, String> carrier = new HashMap<>();
@@ -440,7 +455,8 @@ class W3CBaggagePropagatorTest {
     assertThat(carrier)
         .containsExactlyInAnyOrderEntriesOf(
             singletonMap(
-                "baggage", "meta=meta-value;somemetadata; someother=foo,nometa=nometa-value"));
+                "baggage",
+                "meta=meta-value;somemetadata%3B%20someother%3Dfoo,needsEncoding=blah%20blah%20blah,nometa=nometa-value"));
   }
 
   @Test
@@ -456,5 +472,10 @@ class W3CBaggagePropagatorTest {
     Context context = Context.current().with(Baggage.builder().put("cat", "meow").build());
     W3CBaggagePropagator.getInstance().inject(context, carrier, null);
     assertThat(carrier).isEmpty();
+  }
+
+  @Test
+  void toString_Valid() {
+    assertThat(W3CBaggagePropagator.getInstance().toString()).isEqualTo("W3CBaggagePropagator");
   }
 }

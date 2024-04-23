@@ -5,6 +5,7 @@
 
 package io.opentelemetry.api;
 
+import io.opentelemetry.api.metrics.MeterProvider;
 import io.opentelemetry.api.trace.TracerProvider;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import javax.annotation.concurrent.ThreadSafe;
@@ -37,7 +38,17 @@ final class DefaultOpenTelemetry implements OpenTelemetry {
   }
 
   @Override
+  public MeterProvider getMeterProvider() {
+    return MeterProvider.noop();
+  }
+
+  @Override
   public ContextPropagators getPropagators() {
     return propagators;
+  }
+
+  @Override
+  public String toString() {
+    return "DefaultOpenTelemetry{" + "propagators=" + propagators + "}";
   }
 }

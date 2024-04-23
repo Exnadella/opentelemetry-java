@@ -26,7 +26,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -112,7 +118,7 @@ class ContextTest {
   }
 
   @Test
-  public void closingScopeWhenNotActiveIsLogged() {
+  public void closingScopeWhenNotActiveIsNoopAndLogged() {
     Context initial = Context.current();
     Context context = initial.with(ANIMAL, "cat");
     try (Scope scope = context.makeCurrent()) {
@@ -120,11 +126,32 @@ class ContextTest {
       try (Scope ignored = context2.makeCurrent()) {
         assertThat(Context.current().get(ANIMAL)).isEqualTo("dog");
         scope.close();
+        assertThat(Context.current().get(ANIMAL)).isEqualTo("dog");
       }
     }
     assertThat(Context.current()).isEqualTo(initial);
-    LoggingEvent log = logs.assertContains("Context in storage not the expected context");
+    LoggingEvent log =
+        logs.assertContains("Trying to close scope which does not represent current context");
     assertThat(log.getLevel()).isEqualTo(Level.DEBUG);
+  }
+
+  @SuppressWarnings("MustBeClosedChecker")
+  @Test
+  public void closeScopeIsIdempotent() {
+    Context initial = Context.current();
+    Context context1 = Context.root().with(ANIMAL, "cat");
+    Scope scope1 = context1.makeCurrent();
+    Context context2 = context1.with(ANIMAL, "dog");
+    Scope scope2 = context2.makeCurrent();
+
+    scope2.close();
+    assertThat(Context.current()).isEqualTo(context1);
+
+    scope1.close();
+    assertThat(Context.current()).isEqualTo(initial);
+
+    scope2.close();
+    assertThat(Context.current()).isEqualTo(initial);
   }
 
   @Test
@@ -200,6 +227,113 @@ class ContextTest {
     assertThat(value).hasValue("cat");
 
     assertThat(callback.call()).isEqualTo("foo");
+    assertThat(value).hasValue(null);
+  }
+
+  @Test
+  void wrapFunction() {
+    AtomicReference<String> value = new AtomicReference<>();
+    Function<String, String> callback =
+        (a) -> {
+          value.set(Context.current().get(ANIMAL));
+          return "foo";
+        };
+
+    assertThat(callback.apply("bar")).isEqualTo("foo");
+    assertThat(value).hasValue(null);
+
+    assertThat(CAT.wrapFunction(callback).apply("bar")).isEqualTo("foo");
+    assertThat(value).hasValue("cat");
+
+    assertThat(callback.apply("bar")).isEqualTo("foo");
+    assertThat(value).hasValue(null);
+  }
+
+  @Test
+  void wrapBiFunction() {
+    AtomicReference<String> value = new AtomicReference<>();
+    BiFunction<String, String, String> callback =
+        (a, b) -> {
+          value.set(Context.current().get(ANIMAL));
+          return "foo";
+        };
+
+    assertThat(callback.apply("bar", "baz")).isEqualTo("foo");
+    assertThat(value).hasValue(null);
+
+    assertThat(CAT.wrapFunction(callback).apply("bar", "baz")).isEqualTo("foo");
+    assertThat(value).hasValue("cat");
+
+    assertThat(callback.apply("bar", "baz")).isEqualTo("foo");
+    assertThat(value).hasValue(null);
+  }
+
+  @Test
+  void wrapConsumer() {
+    AtomicReference<String> value = new AtomicReference<>();
+    AtomicBoolean consumed = new AtomicBoolean();
+    Consumer<String> callback =
+        (a) -> {
+          value.set(Context.current().get(ANIMAL));
+          consumed.set(true);
+        };
+
+    callback.accept("bar");
+    assertThat(consumed).isTrue();
+    assertThat(value).hasValue(null);
+
+    consumed.set(false);
+    CAT.wrapConsumer(callback).accept("bar");
+    assertThat(consumed).isTrue();
+    assertThat(value).hasValue("cat");
+
+    consumed.set(false);
+    callback.accept("bar");
+    assertThat(consumed).isTrue();
+    assertThat(value).hasValue(null);
+  }
+
+  @Test
+  void wrapBiConsumer() {
+    AtomicReference<String> value = new AtomicReference<>();
+    AtomicBoolean consumed = new AtomicBoolean();
+    BiConsumer<String, String> callback =
+        (a, b) -> {
+          value.set(Context.current().get(ANIMAL));
+          consumed.set(true);
+        };
+
+    callback.accept("bar", "baz");
+    assertThat(consumed).isTrue();
+    assertThat(value).hasValue(null);
+
+    consumed.set(false);
+    CAT.wrapConsumer(callback).accept("bar", "baz");
+    assertThat(consumed).isTrue();
+    assertThat(value).hasValue("cat");
+
+    consumed.set(false);
+    callback.accept("bar", "baz");
+    assertThat(consumed).isTrue();
+    assertThat(value).hasValue(null);
+  }
+
+  @Test
+  void wrapSupplier() {
+    AtomicReference<String> value = new AtomicReference<>();
+    Supplier<String> callback =
+        () -> {
+          value.set(Context.current().get(ANIMAL));
+          return "foo";
+        };
+
+    assertThat(callback.get()).isEqualTo("foo");
+    assertThat(value).hasValue(null);
+
+    assertThat(CAT.wrapSupplier(callback).get()).isEqualTo("foo");
+    assertThat(value).hasValue("cat");
+
+    assertThat(callback.get()).isEqualTo("foo");
     assertThat(value).hasValue(null);
   }
 

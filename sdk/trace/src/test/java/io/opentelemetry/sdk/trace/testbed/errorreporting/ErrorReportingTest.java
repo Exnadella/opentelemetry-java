@@ -56,7 +56,7 @@ public final class ErrorReportingTest {
   /* Error handling in a callback capturing/activating the Span */
   @Test
   void testCallbackError() {
-    final Span span = tracer.spanBuilder("one").startSpan();
+    Span span = tracer.spanBuilder("one").startSpan();
     executor.submit(
         () -> {
           try (Scope ignored = span.makeCurrent()) {
@@ -81,7 +81,7 @@ public final class ErrorReportingTest {
    * We log the error at each retry. */
   @Test
   void testErrorRecovery() {
-    final int maxRetries = 1;
+    int maxRetries = 1;
     int retries = 0;
     Span span = tracer.spanBuilder("one").startSpan();
     try (Scope ignored = span.makeCurrent()) {
@@ -114,7 +114,6 @@ public final class ErrorReportingTest {
   void testInstrumentationLayer() {
     Span span = tracer.spanBuilder("one").startSpan();
     try (Scope ignored = span.makeCurrent()) {
-      // ScopedRunnable captures the active Span at this time.
       executor.submit(
           new ScopedRunnable(
               () -> {
@@ -125,8 +124,7 @@ public final class ErrorReportingTest {
                 } finally {
                   Span.current().end();
                 }
-              },
-              tracer));
+              }));
     }
 
     await()
@@ -139,13 +137,11 @@ public final class ErrorReportingTest {
   }
 
   private static class ScopedRunnable implements Runnable {
-    Runnable runnable;
-    Tracer tracer;
-    Span span;
+    private final Runnable runnable;
+    private final Span span;
 
-    private ScopedRunnable(Runnable runnable, Tracer tracer) {
+    private ScopedRunnable(Runnable runnable) {
       this.runnable = runnable;
-      this.tracer = tracer;
       this.span = Span.current();
     }
 

@@ -15,6 +15,7 @@ import static io.opentelemetry.api.common.AttributeKey.stringArrayKey;
 import static io.opentelemetry.api.common.AttributeKey.stringKey;
 import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
@@ -33,7 +34,7 @@ class AttributesTest {
 
   @Test
   void forEach() {
-    final Map<AttributeKey, Object> entriesSeen = new LinkedHashMap<>();
+    Map<AttributeKey, Object> entriesSeen = new LinkedHashMap<>();
 
     Attributes attributes = Attributes.of(stringKey("key1"), "value1", longKey("key2"), 333L);
 
@@ -45,7 +46,7 @@ class AttributesTest {
 
   @Test
   void forEach_singleAttribute() {
-    final Map<AttributeKey, Object> entriesSeen = new HashMap<>();
+    Map<AttributeKey, Object> entriesSeen = new HashMap<>();
 
     Attributes attributes = Attributes.of(stringKey("key"), "value");
     attributes.forEach(entriesSeen::put);
@@ -104,8 +105,8 @@ class AttributesTest {
         .isInstanceOf(UnsupportedOperationException.class);
     assertThatThrownBy(map::clear).isInstanceOf(UnsupportedOperationException.class);
 
-    assertThat(map.keySet().contains(stringKey("key1"))).isTrue();
-    assertThat(map.keySet().contains(stringKey("key3"))).isFalse();
+    assertThat(map.containsKey(stringKey("key1"))).isTrue();
+    assertThat(map.containsKey(stringKey("key3"))).isFalse();
     assertThat(map.keySet().containsAll(Arrays.asList(stringKey("key1"), longKey("key2"))))
         .isTrue();
     assertThat(map.keySet().containsAll(Arrays.asList(stringKey("key1"), longKey("key3"))))
@@ -124,7 +125,7 @@ class AttributesTest {
     assertThat(keys).isEmpty(); // Didn't use input array.
     assertThatThrownBy(() -> map.keySet().iterator().remove())
         .isInstanceOf(UnsupportedOperationException.class);
-    assertThat(map.keySet().containsAll(singletonList(stringKey("key1")))).isTrue();
+    assertThat(map.containsKey(stringKey("key1"))).isTrue();
     assertThat(map.keySet().containsAll(Arrays.asList(stringKey("key1"), stringKey("key3"))))
         .isFalse();
     assertThat(map.keySet().isEmpty()).isFalse();
@@ -132,7 +133,7 @@ class AttributesTest {
         .isInstanceOf(UnsupportedOperationException.class);
     assertThatThrownBy(() -> map.keySet().remove(stringKey("key1")))
         .isInstanceOf(UnsupportedOperationException.class);
-    assertThatThrownBy(() -> map.keySet().addAll(Collections.singletonList(stringKey("key3"))))
+    assertThatThrownBy(() -> map.keySet().add(stringKey("key3")))
         .isInstanceOf(UnsupportedOperationException.class);
     assertThatThrownBy(() -> map.keySet().retainAll(Collections.singletonList(stringKey("key3"))))
         .isInstanceOf(UnsupportedOperationException.class);
@@ -141,8 +142,8 @@ class AttributesTest {
     assertThatThrownBy(() -> map.keySet().clear())
         .isInstanceOf(UnsupportedOperationException.class);
 
-    assertThat(map.values().contains("value1")).isTrue();
-    assertThat(map.values().contains("value3")).isFalse();
+    assertThat(map.containsValue("value1")).isTrue();
+    assertThat(map.containsValue("value3")).isFalse();
 
     assertThat(map.toString()).isEqualTo("ReadOnlyArrayMap{key1=value1,key2=333}");
 
@@ -160,7 +161,7 @@ class AttributesTest {
 
   @Test
   void forEach_empty() {
-    final AtomicBoolean sawSomething = new AtomicBoolean(false);
+    AtomicBoolean sawSomething = new AtomicBoolean(false);
     Attributes emptyAttributes = Attributes.empty();
     emptyAttributes.forEach((key, value) -> sawSomething.set(true));
     assertThat(sawSomething.get()).isFalse();
@@ -233,8 +234,12 @@ class AttributesTest {
   @Test
   void emptyAndNullKey() {
     Attributes noAttributes = Attributes.of(stringKey(""), "empty", null, "null");
+    assertThat(noAttributes).isSameAs(Attributes.empty());
+    noAttributes = Attributes.of(null, "empty", stringKey(""), "null");
+    assertThat(noAttributes).isSameAs(Attributes.empty());
 
-    assertThat(noAttributes.size()).isEqualTo(0);
+    assertThat(Attributes.of(stringKey("one"), "one", stringKey(""), "null"))
+        .isEqualTo(Attributes.of(stringKey("one"), "one"));
   }
 
   @Test
@@ -278,6 +283,52 @@ class AttributesTest {
                 33.44,
                 booleanKey("boolean"),
                 false,
+                stringKey("newKey"),
+                "newValue"));
+    // Original not mutated.
+    assertThat(attributes).isEqualTo(wantAttributes);
+  }
+
+  @Test
+  void builderWithAttributeKeyList() {
+    Attributes attributes =
+        Attributes.builder()
+            .put("string", "value1")
+            .put(longKey("long"), 10)
+            .put(stringArrayKey("anotherString"), "value1", "value2", "value3")
+            .put(longArrayKey("anotherLong"), 10L, 20L, 30L)
+            .put(booleanArrayKey("anotherBoolean"), true, false, true)
+            .build();
+
+    Attributes wantAttributes =
+        Attributes.of(
+            stringKey("string"),
+            "value1",
+            longKey("long"),
+            10L,
+            stringArrayKey("anotherString"),
+            Arrays.asList("value1", "value2", "value3"),
+            longArrayKey("anotherLong"),
+            Arrays.asList(10L, 20L, 30L),
+            booleanArrayKey("anotherBoolean"),
+            Arrays.asList(true, false, true));
+    assertThat(attributes).isEqualTo(wantAttributes);
+
+    AttributesBuilder newAttributes = attributes.toBuilder();
+    newAttributes.put("newKey", "newValue");
+    assertThat(newAttributes.build())
+        .isEqualTo(
+            Attributes.of(
+                stringKey("string"),
+                "value1",
+                longKey("long"),
+                10L,
+                stringArrayKey("anotherString"),
+                Arrays.asList("value1", "value2", "value3"),
+                longArrayKey("anotherLong"),
+                Arrays.asList(10L, 20L, 30L),
+                booleanArrayKey("anotherBoolean"),
+                Arrays.asList(true, false, true),
                 stringKey("newKey"),
                 "newValue"));
     // Original not mutated.
@@ -415,5 +466,123 @@ class AttributesTest {
     Attributes attributes = Attributes.of(stringKey("animal"), "cat");
     assertThat(attributes.get(stringKey("animal"))).isEqualTo("cat");
     assertThat(attributes.get(longKey("animal"))).isNull();
+  }
+
+  @Test
+  void remove() {
+    AttributesBuilder builder = Attributes.builder();
+    assertThat(builder.remove(stringKey(""))).isEqualTo(builder);
+
+    Attributes attributes = Attributes.builder().remove(stringKey("key1")).build();
+    assertThat(attributes).isEqualTo(Attributes.builder().build());
+
+    attributes =
+        Attributes.builder().put("key1", "value1").build().toBuilder()
+            .remove(stringKey("key1"))
+            .remove(stringKey("key1"))
+            .build();
+    assertThat(attributes).isEqualTo(Attributes.builder().build());
+
+    attributes =
+        Attributes.builder()
+            .put("key1", "value1")
+            .put("key1", "value2")
+            .put("key2", "value2")
+            .put("key3", "value3")
+            .remove(stringKey("key1"))
+            .build();
+    assertThat(attributes)
+        .isEqualTo(Attributes.builder().put("key2", "value2").put("key3", "value3").build());
+
+    attributes =
+        Attributes.builder()
+            .put("key1", "value1")
+            .put("key1", true)
+            .remove(stringKey("key1"))
+            .remove(stringKey("key1"))
+            .build();
+    assertThat(attributes).isEqualTo(Attributes.builder().put("key1", true).build());
+  }
+
+  @Test
+  void removeIf() {
+    AttributesBuilder builder = Attributes.builder();
+    assertThat(builder.removeIf(unused -> true)).isEqualTo(builder);
+
+    Attributes attributes =
+        Attributes.builder().removeIf(key -> key.getKey().equals("key1")).build();
+    assertThat(attributes).isEqualTo(Attributes.builder().build());
+
+    attributes =
+        Attributes.builder().put("key1", "value1").build().toBuilder()
+            .removeIf(key -> key.getKey().equals("key1"))
+            .removeIf(key -> key.getKey().equals("key1"))
+            .build();
+    assertThat(attributes).isEqualTo(Attributes.builder().build());
+
+    attributes =
+        Attributes.builder()
+            .put("key1", "value1")
+            .put("key1", "value2")
+            .put("key2", "value2")
+            .put("key3", "value3")
+            .removeIf(key -> key.getKey().equals("key1"))
+            .build();
+    assertThat(attributes)
+        .isEqualTo(Attributes.builder().put("key2", "value2").put("key3", "value3").build());
+
+    attributes =
+        Attributes.builder()
+            .put("key1", "value1A")
+            .put("key1", true)
+            .removeIf(
+                key -> key.getKey().equals("key1") && key.getType().equals(AttributeType.STRING))
+            .build();
+    assertThat(attributes).isEqualTo(Attributes.builder().put("key1", true).build());
+
+    attributes =
+        Attributes.builder()
+            .put("key1", "value1")
+            .put("key2", "value2")
+            .put("foo", "bar")
+            .removeIf(key -> key.getKey().matches("key.*"))
+            .build();
+    assertThat(attributes).isEqualTo(Attributes.builder().put("foo", "bar").build());
+  }
+
+  @Test
+  void remove_defaultImplementationDoesNotThrow() {
+    AttributesBuilder myAttributesBuilder =
+        new AttributesBuilder() {
+          @Override
+          public Attributes build() {
+            return null;
+          }
+
+          @Override
+          public <T> AttributesBuilder put(AttributeKey<Long> key, int value) {
+            return null;
+          }
+
+          @Override
+          public <T> AttributesBuilder put(AttributeKey<T> key, T value) {
+            return null;
+          }
+
+          @Override
+          public AttributesBuilder putAll(Attributes attributes) {
+            return null;
+          }
+        };
+
+    assertThatCode(() -> myAttributesBuilder.remove(stringKey("foo"))).doesNotThrowAnyException();
+    assertThatCode(() -> myAttributesBuilder.removeIf(unused -> false)).doesNotThrowAnyException();
+  }
+
+  @Test
+  void emptyValueIsValid() {
+    AttributeKey<String> key = stringKey("anything");
+    Attributes attributes = Attributes.of(key, "");
+    assertThat(attributes.get(key)).isEqualTo("");
   }
 }

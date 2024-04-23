@@ -5,6 +5,9 @@
 
 package io.opentelemetry.opentracingshim;
 
+import io.opentelemetry.api.trace.TracerProvider;
+import io.opentelemetry.context.propagation.TextMapPropagator;
+import io.opentelemetry.opentracing.shim.internal.OtelVersion;
 import io.opentracing.Scope;
 import io.opentracing.ScopeManager;
 import io.opentracing.Span;
@@ -13,21 +16,41 @@ import io.opentracing.Tracer;
 import io.opentracing.propagation.Format;
 import io.opentracing.propagation.TextMapExtract;
 import io.opentracing.propagation.TextMapInject;
+import java.io.Closeable;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
-final class TracerShim extends BaseShimObject implements Tracer {
+final class TracerShim implements Tracer {
   private static final Logger logger = Logger.getLogger(TracerShim.class.getName());
 
+  private final io.opentelemetry.api.trace.TracerProvider provider;
+  private final io.opentelemetry.api.trace.Tracer tracer;
   private final ScopeManager scopeManagerShim;
   private final Propagation propagation;
-  private volatile boolean isClosed;
+  private final AtomicBoolean isShutdown = new AtomicBoolean();
 
-  TracerShim(TelemetryInfo telemetryInfo) {
-    super(telemetryInfo);
-    this.scopeManagerShim = new ScopeManagerShim(telemetryInfo);
-    this.propagation = new Propagation(telemetryInfo);
+  TracerShim(
+      io.opentelemetry.api.trace.TracerProvider provider,
+      TextMapPropagator textMapPropagator,
+      TextMapPropagator httpPropagator) {
+    this.provider = provider;
+    this.tracer = provider.get("opentracing-shim", OtelVersion.VERSION);
+    this.propagation = new Propagation(textMapPropagator, httpPropagator);
+    this.scopeManagerShim = new ScopeManagerShim();
+  }
+
+  // Visible for testing
+  io.opentelemetry.api.trace.Tracer tracer() {
+    return tracer;
+  }
+
+  // Visible for testing
+  Propagation propagation() {
+    return propagation;
   }
 
   @Override
@@ -47,11 +70,11 @@ final class TracerShim extends BaseShimObject implements Tracer {
 
   @Override
   public SpanBuilder buildSpan(String operationName) {
-    if (isClosed) {
-      return new NoopSpanBuilderShim(telemetryInfo(), operationName);
+    if (isShutdown.get()) {
+      return new NoopSpanBuilderShim(operationName);
     }
 
-    return new SpanBuilderShim(telemetryInfo, operationName);
+    return new SpanBuilderShim(tracer, operationName);
   }
 
   @Override
@@ -61,7 +84,10 @@ final class TracerShim extends BaseShimObject implements Tracer {
       return;
     }
 
-    SpanContextShim contextShim = getContextShim(context);
+    SpanContextShim contextShim = ShimUtil.getContextShim(context);
+    if (contextShim == null) {
+      return;
+    }
 
     if (format == Format.Builtin.TEXT_MAP
         || format == Format.Builtin.TEXT_MAP_INJECT
@@ -92,14 +118,34 @@ final class TracerShim extends BaseShimObject implements Tracer {
 
   @Override
   public void close() {
-    isClosed = true;
-  }
-
-  static SpanContextShim getContextShim(SpanContext context) {
-    if (!(context instanceof SpanContextShim)) {
-      throw new IllegalArgumentException("context is not a valid SpanContextShim object");
+    if (!isShutdown.compareAndSet(false, true)) {
+      return;
     }
 
-    return (SpanContextShim) context;
+    TracerProvider provider = maybeUnobfuscate(this.provider);
+    if (provider instanceof Closeable) {
+      try {
+        ((Closeable) provider).close();
+      } catch (RuntimeException | IOException e) {
+        logger.log(Level.INFO, "Exception caught while closing TracerProvider.", e);
+      }
+    }
+  }
+
+  private static TracerProvider maybeUnobfuscate(TracerProvider tracerProvider) {
+    if (!tracerProvider.getClass().getSimpleName().equals("ObfuscatedTracerProvider")) {
+      return tracerProvider;
+    }
+    try {
+      Field delegateField = tracerProvider.getClass().getDeclaredField("delegate");
+      delegateField.setAccessible(true);
+      Object delegate = delegateField.get(tracerProvider);
+      if (delegate instanceof TracerProvider) {
+        return (TracerProvider) delegate;
+      }
+    } catch (NoSuchFieldException | IllegalAccessException e) {
+      logger.log(Level.INFO, "Error trying to unobfuscate SdkTracerProvider", e);
+    }
+    return tracerProvider;
   }
 }

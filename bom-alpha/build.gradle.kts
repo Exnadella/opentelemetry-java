@@ -1,30 +1,17 @@
 plugins {
-  id("java-platform")
-  id("otel.publish-conventions")
+  id("otel.bom-conventions")
 }
 
 description = "OpenTelemetry Bill of Materials (Alpha)"
 group = "io.opentelemetry"
-base.archivesBaseName = "opentelemetry-bom-alpha"
+base.archivesName.set("opentelemetry-bom-alpha")
 
-rootProject.subprojects.forEach { subproject ->
-  if (!project.name.startsWith("bom")) {
-    evaluationDependsOn(subproject.path)
-  }
-}
+otelBom.projectFilter.set { it.findProperty("otel.release") == "alpha" }
 
-afterEvaluate {
-  dependencies {
-    constraints {
-      rootProject.subprojects
-        .sortedBy { it.findProperty("archivesBaseName") as String? }
-        .filter { !it.name.startsWith("bom") }
-        .filter { it.findProperty("otel.release") == "alpha" }
-        .forEach { project ->
-          project.plugins.withId("maven-publish") {
-            api(project)
-          }
-        }
-    }
-  }
+// Required to place dependency on opentelemetry-bom
+javaPlatform.allowDependencies()
+
+dependencies {
+  // Add dependency on opentelemetry-bom to ensure synchronization between alpha and stable artifacts
+  api(platform(project(":bom")))
 }

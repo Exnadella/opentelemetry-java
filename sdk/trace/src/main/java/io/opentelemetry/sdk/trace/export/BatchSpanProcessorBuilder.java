@@ -8,6 +8,7 @@ package io.opentelemetry.sdk.trace.export;
 import static io.opentelemetry.api.internal.Utils.checkArgument;
 import static java.util.Objects.requireNonNull;
 
+import io.opentelemetry.api.metrics.MeterProvider;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
@@ -24,16 +25,27 @@ public final class BatchSpanProcessorBuilder {
   static final int DEFAULT_EXPORT_TIMEOUT_MILLIS = 30_000;
 
   private final SpanExporter spanExporter;
+  private boolean exportUnsampledSpans = false;
   private long scheduleDelayNanos = TimeUnit.MILLISECONDS.toNanos(DEFAULT_SCHEDULE_DELAY_MILLIS);
   private int maxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
   private int maxExportBatchSize = DEFAULT_MAX_EXPORT_BATCH_SIZE;
   private long exporterTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(DEFAULT_EXPORT_TIMEOUT_MILLIS);
+  private MeterProvider meterProvider = MeterProvider.noop();
 
   BatchSpanProcessorBuilder(SpanExporter spanExporter) {
     this.spanExporter = requireNonNull(spanExporter, "spanExporter");
   }
 
-  // TODO: Consider to add support for constant Attributes and/or Resource.
+  /**
+   * Sets whether unsampled spans should be exported. If unset, defaults to exporting only sampled
+   * spans.
+   *
+   * @since 1.34.0
+   */
+  public BatchSpanProcessorBuilder setExportUnsampledSpans(boolean exportUnsampledSpans) {
+    this.exportUnsampledSpans = exportUnsampledSpans;
+    return this;
+  }
 
   /**
    * Sets the delay interval between two consecutive exports. If unset, defaults to {@value
@@ -89,9 +101,6 @@ public final class BatchSpanProcessorBuilder {
    * Sets the maximum number of Spans that are kept in the queue before start dropping. More memory
    * than this value may be allocated to optimize queue access.
    *
-   * <p>See the BatchSampledSpansProcessor class description for a high-level design description of
-   * this class.
-   *
    * <p>Default value is {@code 2048}.
    *
    * @param maxQueueSize the maximum number of Spans that are kept in the queue before start
@@ -111,7 +120,7 @@ public final class BatchSpanProcessorBuilder {
 
   /**
    * Sets the maximum batch size for every export. This must be smaller or equal to {@code
-   * maxQueuedSpans}.
+   * maxQueueSize}.
    *
    * <p>Default value is {@code 512}.
    *
@@ -125,6 +134,16 @@ public final class BatchSpanProcessorBuilder {
     return this;
   }
 
+  /**
+   * Sets the {@link MeterProvider} to use to collect metrics related to batch export. If not set,
+   * metrics will not be collected.
+   */
+  public BatchSpanProcessorBuilder setMeterProvider(MeterProvider meterProvider) {
+    requireNonNull(meterProvider, "meterProvider");
+    this.meterProvider = meterProvider;
+    return this;
+  }
+
   // Visible for testing
   int getMaxExportBatchSize() {
     return maxExportBatchSize;
@@ -135,10 +154,15 @@ public final class BatchSpanProcessorBuilder {
    * forwards them to the given {@code spanExporter}.
    *
    * @return a new {@link BatchSpanProcessor}.
-   * @throws NullPointerException if the {@code spanExporter} is {@code null}.
    */
   public BatchSpanProcessor build() {
     return new BatchSpanProcessor(
-        spanExporter, scheduleDelayNanos, maxQueueSize, maxExportBatchSize, exporterTimeoutNanos);
+        spanExporter,
+        exportUnsampledSpans,
+        meterProvider,
+        scheduleDelayNanos,
+        maxQueueSize,
+        maxExportBatchSize,
+        exporterTimeoutNanos);
   }
 }

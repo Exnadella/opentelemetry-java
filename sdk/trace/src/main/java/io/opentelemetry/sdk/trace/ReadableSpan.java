@@ -5,13 +5,17 @@
 
 package io.opentelemetry.sdk.trace;
 
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
+import io.opentelemetry.sdk.internal.InstrumentationScopeUtil;
 import io.opentelemetry.sdk.trace.data.SpanData;
+import javax.annotation.Nullable;
 
-/** The extend Span interface used by the SDK. */
+/** SDK representation of a {@code Span} that can be read. */
 public interface ReadableSpan {
 
   /**
@@ -24,10 +28,10 @@ public interface ReadableSpan {
   SpanContext getSpanContext();
 
   /**
-   * Returns the parent {@link SpanContext} of the {@link Span}, or {@link SpanContext#getInvalid()}
+   * Returns the parent {@link SpanContext} of the {@code Span}, or {@link SpanContext#getInvalid()}
    * if this is a root span.
    *
-   * @return the parent {@link SpanContext} of the {@link Span}
+   * @return the parent {@link SpanContext} of the {@code Span}
    */
   SpanContext getParentSpanContext();
 
@@ -36,6 +40,8 @@ public interface ReadableSpan {
    *
    * <p>The name can be changed during the lifetime of the Span by using the {@link
    * Span#updateName(String)} so this value cannot be cached.
+   *
+   * <p>Note: the implementation of this method performs locking to ensure thread-safe behavior.
    *
    * @return the name of the {@code Span}.
    */
@@ -52,13 +58,26 @@ public interface ReadableSpan {
    * Returns the instrumentation library specified when creating the tracer which produced this
    * span.
    *
-   * @return an instance of {@link InstrumentationLibraryInfo} describing the instrumentation
-   *     library
+   * @return an instance of {@link io.opentelemetry.sdk.common.InstrumentationLibraryInfo}
+   *     describing the instrumentation library
+   * @deprecated Use {@link #getInstrumentationScopeInfo()}.
    */
-  InstrumentationLibraryInfo getInstrumentationLibraryInfo();
+  @Deprecated
+  io.opentelemetry.sdk.common.InstrumentationLibraryInfo getInstrumentationLibraryInfo();
+
+  /**
+   * Returns the instrumentation scope specified when creating the tracer which produced this span.
+   *
+   * @return an instance of {@link InstrumentationScopeInfo} describing the instrumentation scope
+   */
+  default InstrumentationScopeInfo getInstrumentationScopeInfo() {
+    return InstrumentationScopeUtil.toInstrumentationScopeInfo(getInstrumentationLibraryInfo());
+  }
 
   /**
    * Returns whether this Span has already been ended.
+   *
+   * <p>Note: the implementation of this method performs locking to ensure thread-safe behavior.
    *
    * @return {@code true} if the span has already been ended, {@code false} if not.
    */
@@ -67,6 +86,8 @@ public interface ReadableSpan {
   /**
    * Returns the latency of the {@code Span} in nanos. If still active then returns now() - start
    * time.
+   *
+   * <p>Note: the implementation of this method performs locking to ensure thread-safe behavior.
    *
    * @return the latency of the {@code Span} in nanos.
    */
@@ -78,4 +99,33 @@ public interface ReadableSpan {
    * @return the kind of the span.
    */
   SpanKind getKind();
+
+  /**
+   * Returns the value for the given {@link AttributeKey}, or {@code null} if not found.
+   *
+   * <p>The attribute values can be changed during the lifetime of the Span by using {@link
+   * Span#setAttribute}} so this value cannot be cached.
+   *
+   * <p>Note: the implementation of this method performs locking to ensure thread-safe behavior.
+   *
+   * @return the value for the given {@link AttributeKey}, or {@code null} if not found.
+   */
+  @Nullable
+  <T> T getAttribute(AttributeKey<T> key);
+
+  /**
+   * Returns the Span attributes.
+   *
+   * <p>Attributes can be changed during the lifetime of the Span by using {@link
+   * Span#setAttribute}} so this value cannot be cached.
+   *
+   * <p>Note: the implementation of this method performs locking and returns an immutable copy to
+   * ensure thread-safe behavior. If you only need a single attribute it is better to call {@link
+   * #getAttribute(AttributeKey)}.
+   *
+   * @return the Span attributes, or {@link Attributes#empty()} if the span has no attributes.
+   */
+  default Attributes getAttributes() {
+    return Attributes.empty();
+  }
 }

@@ -35,7 +35,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
-import org.jetbrains.annotations.Nullable;
+import javax.annotation.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -50,7 +50,10 @@ class B3PropagationIntegrationTest {
 
   private static final InMemorySpanExporter spanExporter = InMemorySpanExporter.create();
 
+  @SuppressWarnings("NonFinalStaticField")
   static WebClient b3MultiClient;
+
+  @SuppressWarnings("NonFinalStaticField")
   static WebClient b3SingleClient;
 
   private static class FrontendService implements HttpService {
@@ -72,7 +75,7 @@ class B3PropagationIntegrationTest {
               .setParent(incomingContext)
               .startSpan();
       try (Scope ignored = span.makeCurrent()) {
-        return HttpResponse.from(
+        return HttpResponse.of(
             client
                 .get()
                 .get("/backend")

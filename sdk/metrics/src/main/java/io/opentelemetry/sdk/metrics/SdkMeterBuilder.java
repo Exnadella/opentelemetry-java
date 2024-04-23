@@ -5,20 +5,22 @@
 
 package io.opentelemetry.sdk.metrics;
 
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.metrics.Meter;
 import io.opentelemetry.api.metrics.MeterBuilder;
 import io.opentelemetry.sdk.internal.ComponentRegistry;
+import javax.annotation.Nullable;
 
 class SdkMeterBuilder implements MeterBuilder {
 
   private final ComponentRegistry<SdkMeter> registry;
-  private final String instrumentationName;
-  private String instrumentationVersion;
-  private String schemaUrl;
+  private final String instrumentationScopeName;
+  @Nullable private String instrumentationScopeVersion;
+  @Nullable private String schemaUrl;
 
-  SdkMeterBuilder(ComponentRegistry<SdkMeter> registry, String instrumentationName) {
+  SdkMeterBuilder(ComponentRegistry<SdkMeter> registry, String instrumentationScopeName) {
     this.registry = registry;
-    this.instrumentationName = instrumentationName;
+    this.instrumentationScopeName = instrumentationScopeName;
   }
 
   @Override
@@ -28,13 +30,14 @@ class SdkMeterBuilder implements MeterBuilder {
   }
 
   @Override
-  public MeterBuilder setInstrumentationVersion(String instrumentationVersion) {
-    this.instrumentationVersion = instrumentationVersion;
+  public MeterBuilder setInstrumentationVersion(String instrumentationScopeVersion) {
+    this.instrumentationScopeVersion = instrumentationScopeVersion;
     return this;
   }
 
   @Override
   public Meter build() {
-    return registry.get(instrumentationName, instrumentationVersion, schemaUrl);
+    return registry.get(
+        instrumentationScopeName, instrumentationScopeVersion, schemaUrl, Attributes.empty());
   }
 }

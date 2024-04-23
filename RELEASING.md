@@ -1,37 +1,69 @@
 # OpenTelemetry Release Process
 
-## Starting the Release
+Before releasing, it is a good idea to run `./gradlew japicmp` on the main branch and verify that
+there are no unexpected public API changes seen in the `docs/apidiffs/current_vs_latest`
+directory. Additionally, ensure that appropriate `@since` annotations are added to any additions to
+the public APIs.
 
-Before releasing, it is a good idea to run `./gradlew japicmp` on the main branch
-and verify that there are no unexpected public API changes seen in the `docs/apidiffs/current_vs_latest`
-directory.
+When preparing the change log, you can use
+the [draft-change-log-entries.sh](./.github/scripts/draft-change-log-entries.sh) script to assist
+with drafting. Alternatively,
+use `git log upstream/v$MAJOR.$((MINOR-1)).x..upstream/v$MAJOR.$MINOR.x --graph --first-parent` or
+the Github [compare tool](https://github.com/open-telemetry/opentelemetry-java/compare/) to view a
+summary of all commits since last release as a reference.
 
-Open the release build workflow in your browser [here](https://github.com/open-telemetry/opentelemetry-java/actions/workflows/release-build.yml).
+## Release cadence
 
-You will see a button that says "Run workflow". Press the button, enter the version number you want
-to release in the input field that pops up, and then press "Run workflow".
+This repository roughly targets monthly minor releases from the `main` branch on the Friday after
+the first Monday of the month.
 
-This triggers the release process, which builds the artifacts. It will not automatically update the 
-documentation, because the Github Actions cannot push changes to the main branch.
+## Preparing a new major or minor release
 
-## Announcement
-   
-Once the GitHub workflow completes, go to Github [release
-page](https://github.com/open-telemetry/opentelemetry-java/releases), press
-`Draft a new release` to write release notes about the new release. If there is already a draft
-release notes, just point it at the created tag.
+* Close the release milestone if there is one.
+* Merge a pull request to `main` updating the `CHANGELOG.md`.
+  * The heading for the unreleased entries should be `## Unreleased`.
+* Run the [Prepare release branch workflow](https://github.com/open-telemetry/opentelemetry-java/actions/workflows/prepare-release-branch.yml).
+  * Press the "Run workflow" button, and leave the default branch `main` selected.
+  * Review and merge the two pull requests that it creates
+    (one is targeted to the release branch and one is targeted to `main`).
 
-You can use `git log upstream/v$MAJOR.$((MINOR-1)).x..upstream/v$MAJOR.$MINOR.x --graph --first-parent`
-or the Github [compare tool](https://github.com/open-telemetry/opentelemetry-java/compare/)
-to view a summary of all commits since last release as a reference.
+## Preparing a new patch release
 
-In addition, you can refer to
-[CHANGELOG.md](https://github.com/open-telemetry/opentelemetry-java/blob/main/CHANGELOG.md)
-for a list of major changes since last release.
+All patch releases should include only bug-fixes, and must avoid adding/modifying the public APIs.
 
-## Update release versions in documentations and CHANGELOG files
+In general, patch releases are only made for regressions, security vulnerabilities, memory leaks
+and deadlocks.
 
-After releasing is done, you need to first update the docs.
+* Backport pull request(s) to the release branch.
+  * Run the [Backport workflow](https://github.com/open-telemetry/opentelemetry-java/actions/workflows/backport.yml).
+  * Press the "Run workflow" button, then select the release branch from the dropdown list,
+    e.g. `release/v1.9.x`, then enter the pull request number that you want to backport,
+    then click the "Run workflow" button below that.
+  * Review and merge the backport pull request that it generates.
+* Merge a pull request to the release branch updating the `CHANGELOG.md`.
+  * The heading for the unreleased entries should be `## Unreleased`.
+* Run the [Prepare patch release workflow](https://github.com/open-telemetry/opentelemetry-java/actions/workflows/prepare-patch-release.yml).
+  * Press the "Run workflow" button, then select the release branch from the dropdown list,
+    e.g. `release/v1.9.x`, and click the "Run workflow" button below that.
+  * Review and merge the pull request that it creates for updating the version.
+
+## Making the release
+
+* Run the [Release workflow](https://github.com/open-telemetry/opentelemetry-java/actions/workflows/release.yml).
+  * Press the "Run workflow" button, then select the release branch from the dropdown list,
+    e.g. `release/v1.9.x`, and click the "Run workflow" button below that.
+  * This workflow will publish the artifacts to maven central and will publish a GitHub release
+    with release notes based on the change log.
+  * Review and merge the pull request that it creates for updating the change log in main
+    (note that if this is not a patch release then the change log on main may already be up-to-date,
+    in which case no pull request will be created).
+  * The [website](https://github.com/open-telemetry/opentelemetry.io) contains automation to update
+    to the newly released version. Review and approve the pull request when available.
+
+## Update release versions in documentations
+
+After releasing is done, you need to first update the docs. This needs to happen after artifacts have propagated
+to Maven Central so should probably be done an hour or two after the release workflow finishes.
 
 ```
 ./gradlew updateVersionInDocs -Prelease.version=x.y.z
@@ -41,75 +73,31 @@ After releasing is done, you need to first update the docs.
 
 Where `x.y.z` is the version just released and `a.b.c` is the previous version.
 
-Next, update the
-[CHANGELOG.md](https://github.com/open-telemetry/opentelemetry-java/blob/main/CHANGELOG.md).
-
-Create a PR to mark the new release in README.md and CHANGELOG.md on the main branch.
-
-Finally, update the files `website_docs` directory to point at the newly released version. Once that has
-been merged to the main branch, use the "Update OpenTelemetry Website" github action to create a PR 
-in the website repository with the changes.
-
-## Patch Release
-
-All patch releases should include only bug-fixes, and must avoid
-adding/modifying the public APIs. 
-
-Open the patch release build workflow in your browser [here](https://github.com/open-telemetry/opentelemetry-java/actions/workflows/patch-release-build.yml).
-
-You will see a button that says "Run workflow". Press the button, enter the version number you want
-to release in the input field for version that pops up and the commits you want to cherrypick for the
-patch as a comma-separated list. Then, press "Run workflow".
-
-If the commits cannot be cleanly applied to the release branch, for example because it has diverged
-too much from main, then the workflow will fail before building. In this case, you will need to
-prepare the release branch manually.
-
-This example will assume patching into release branch `v1.2.x` from a git repository with remotes
-named `origin` and `upstream`.
-
-```
-$ git remote -v
-origin	git@github.com:username/opentelemetry-java.git (fetch)
-origin	git@github.com:username/opentelemetry-java.git (push)
-upstream	git@github.com:open-telemetry/opentelemetry-java.git (fetch)
-upstream	git@github.com:open-telemetry/opentelemetry-java.git (push)
-```
-
-First, checkout the release branch
-
-```
-git fetch upstream v1.2.x
-git checkout upstream/v1.2.x
-```
-
-Apply cherrypicks manually and commit. It is ok to apply multiple cherrypicks in a single commit.
-Use a commit message such as "Manual cherrypick for commits commithash1, commithash2".
-
-After commiting the change, push to your fork's branch.
-
-```
-git push origin v1.2.x
-```
-
-Create a PR to have code review and merge this into upstream's release branch. As this was not
-applied automatically, we need to do code review to make sure the manual cherrypick is correct.
-
-After it is merged, Run the patch release workflow again, but leave the commits input field blank.
-The release will be made with the current state of the release branch, which is what you prepared
-above.
+Create a PR against the main branch with the changes.
 
 ## Credentials
 
-The following credentials are required for publishing (and automatically set in Circle CI):
+The following credentials are required for building or publishing (and automatically set in Github Actions):
 
-* `GPG_PRIVATE_KEY` and `GPG_PASSWORD`: GPG private key and password for signing
-  - Note, currently only @anuraaga has this and we need to find a way to safely share secrets in the
-    OpenTelemetry project, for example with a password manager. In the worst case if you need to
-    release manually and cannot get a hold of it, you can generate a new key but don't forget to
-    upload the public key to keyservers.
-
+* `GPG_PRIVATE_KEY` and `GPG_PASSWORD`: GPG private key and password for signing.
 * `SONATYPE_USER` and `SONATYPE_KEY`: Sonatype username and password.
+  * Each maintainer will have their own set of Sonotype credentials with permission to publish to
+    the `io.opentelemetry` group prefix.
+  * [Register to publish](https://central.sonatype.org/register/central-portal/#and-publishing-is-easy)
+    and comment on [OSSRH-63768](https://issues.sonatype.org/browse/OSSRH-63768) with confirmation
+    from another maintainer.
+  * To obtain `SONATYPE_USER` and `SONATYPE_KEY` for your account, login
+    to [oss.sonatype.org](https://oss.sonatype.org/) and navigate to Profile -> User Token -> Access
+    User Token.
+
+Additionally, credentials are stored with maintainers via
+the [OpenTelemetry 1Password](https://opentelemetry.1password.com/signin) account. The following
+defines the mapping from Github Action secret keys to 1Password keys:
+
+| Github Actions Key | 1Password Key |
+|--------------------|---------------|
+| `GPG_PASSWORD` | `opentelemetry-java GPG_PASSWORD` |
+| `GPG_PRIVATE_KEY` | `opentelemetry-java GPG_PRIVATE_KEY` |
 
 ## Releasing from the local setup
 

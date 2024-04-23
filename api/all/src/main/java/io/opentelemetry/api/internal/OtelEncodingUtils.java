@@ -8,6 +8,10 @@ package io.opentelemetry.api.internal;
 import java.util.Arrays;
 import javax.annotation.concurrent.Immutable;
 
+/**
+ * This class is internal and is hence not for public use. Its APIs are unstable and can change at
+ * any time.
+ */
 @Immutable
 public final class OtelEncodingUtils {
   static final int LONG_BYTES = Long.SIZE / Byte.SIZE;
@@ -17,6 +21,7 @@ public final class OtelEncodingUtils {
   private static final int NUM_ASCII_CHARACTERS = 128;
   private static final char[] ENCODING = buildEncodingArray();
   private static final byte[] DECODING = buildDecodingArray();
+  private static final boolean[] VALID_HEX = buildValidHexArray();
 
   private static char[] buildEncodingArray() {
     char[] encoding = new char[512];
@@ -35,6 +40,14 @@ public final class OtelEncodingUtils {
       decoding[c] = (byte) i;
     }
     return decoding;
+  }
+
+  private static boolean[] buildValidHexArray() {
+    boolean[] validHex = new boolean[Character.MAX_VALUE];
+    for (int i = 0; i < Character.MAX_VALUE; i++) {
+      validHex[i] = (48 <= i && i <= 57) || (97 <= i && i <= 102);
+    }
+    return validHex;
   }
 
   /**
@@ -122,7 +135,8 @@ public final class OtelEncodingUtils {
 
   /** Returns whether the {@link CharSequence} is a valid hex string. */
   public static boolean isValidBase16String(CharSequence value) {
-    for (int i = 0; i < value.length(); i++) {
+    int len = value.length();
+    for (int i = 0; i < len; i++) {
       char b = value.charAt(i);
       if (!isValidBase16Character(b)) {
         return false;
@@ -133,8 +147,7 @@ public final class OtelEncodingUtils {
 
   /** Returns whether the given {@code char} is a valid hex character. */
   public static boolean isValidBase16Character(char b) {
-    // 48..57 && 97..102 are valid
-    return (48 <= b && b <= 57) || (97 <= b && b <= 102);
+    return VALID_HEX[b];
   }
 
   private OtelEncodingUtils() {}

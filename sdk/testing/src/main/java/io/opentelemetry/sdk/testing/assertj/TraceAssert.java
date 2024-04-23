@@ -59,8 +59,36 @@ public final class TraceAssert
     List<Consumer<SpanDataAssert>> assertionsList =
         StreamSupport.stream(assertions.spliterator(), false).collect(Collectors.toList());
     hasSize(assertionsList.size());
-    zipSatisfy(assertionsList, (span, assertion) -> assertion.accept(new SpanDataAssert(span)));
+    // Avoid zipSatisfy - https://github.com/assertj/assertj-core/issues/2300
+    for (int i = 0; i < assertionsList.size(); i++) {
+      assertionsList.get(i).accept(new SpanDataAssert(actual.get(i)));
+    }
     return this;
+  }
+
+  /**
+   * Asserts that the trace under assertion has the same number of spans as provided {@code
+   * assertions} and verifies that there is a combination of spans that satisfies specified {@link
+   * SpanDataAssert} {@code assertions} in the given order. This is a variation of {@link
+   * #hasSpansSatisfyingExactly(Consumer...)} where order does not matter.
+   */
+  @SafeVarargs
+  @SuppressWarnings("varargs")
+  public final TraceAssert hasSpansSatisfyingExactlyInAnyOrder(
+      Consumer<SpanDataAssert>... assertions) {
+    return hasSpansSatisfyingExactlyInAnyOrder(Arrays.asList(assertions));
+  }
+
+  /**
+   * Asserts that the trace under assertion has the same number of spans as provided {@code
+   * assertions} and verifies that there is a combination of spans that satisfies specified {@link
+   * SpanDataAssert} {@code assertions} in the given order. This is a variation of {@link
+   * #hasSpansSatisfyingExactly(Iterable)} where order does not matter.
+   */
+  public TraceAssert hasSpansSatisfyingExactlyInAnyOrder(
+      Iterable<? extends Consumer<SpanDataAssert>> assertions) {
+    Consumer<SpanData>[] spanDataAsserts = AssertUtil.toConsumers(assertions, SpanDataAssert::new);
+    return satisfiesExactlyInAnyOrder(spanDataAsserts);
   }
 
   /**

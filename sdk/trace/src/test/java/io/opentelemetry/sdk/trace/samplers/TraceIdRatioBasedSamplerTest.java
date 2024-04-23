@@ -19,6 +19,7 @@ import io.opentelemetry.sdk.trace.IdGenerator;
 import io.opentelemetry.sdk.trace.data.LinkData;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import org.junit.jupiter.api.Test;
 
 class TraceIdRatioBasedSamplerTest {
@@ -67,9 +68,15 @@ class TraceIdRatioBasedSamplerTest {
   }
 
   @Test
-  void getDescription() {
-    assertThat(Sampler.traceIdRatioBased(0.5).getDescription())
-        .isEqualTo(String.format("TraceIdRatioBased{%.6f}", 0.5));
+  void descriptionShouldBeLocaleIndependent() {
+    Sampler sampler = Sampler.traceIdRatioBased(0.5);
+
+    // PL locale uses ',' as decimal separator
+    Locale.setDefault(Locale.forLanguageTag("PL"));
+    assertThat(sampler.getDescription()).isEqualTo("TraceIdRatioBased{0.500000}");
+
+    Locale.setDefault(Locale.ENGLISH);
+    assertThat(sampler.getDescription()).isEqualTo("TraceIdRatioBased{0.500000}");
   }
 
   @Test
@@ -144,7 +151,7 @@ class TraceIdRatioBasedSamplerTest {
 
   @Test
   void sampleBasedOnTraceId() {
-    final Sampler defaultProbability = Sampler.traceIdRatioBased(0.0001);
+    Sampler defaultProbability = Sampler.traceIdRatioBased(0.0001);
     // This traceId will not be sampled by the Probability Sampler because the last 8 bytes as long
     // is not less than probability * Long.MAX_VALUE;
     String notSampledTraceId = "00000000000000008fffffffffffffff";

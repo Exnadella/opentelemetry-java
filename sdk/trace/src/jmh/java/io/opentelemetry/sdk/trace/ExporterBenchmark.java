@@ -7,7 +7,6 @@ package io.opentelemetry.sdk.trace;
 
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.exporter.jaeger.thrift.JaegerThriftSpanExporter;
 import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
@@ -39,7 +38,6 @@ public class ExporterBenchmark {
     private static final DockerImageName OTLP_COLLECTOR_IMAGE =
         DockerImageName.parse("otel/opentelemetry-collector-dev:latest");
     protected static final int OTLP_PORT = 5678;
-    protected static final int JAEGER_PORT = 14268;
     private static final int HEALTH_CHECK_PORT = 13133;
     protected SdkSpanBuilder sdkSpanBuilder;
 
@@ -50,7 +48,7 @@ public class ExporterBenchmark {
       // Configuring the collector test-container
       GenericContainer<?> collector =
           new GenericContainer<>(OTLP_COLLECTOR_IMAGE)
-              .withExposedPorts(OTLP_PORT, HEALTH_CHECK_PORT, JAEGER_PORT)
+              .withExposedPorts(OTLP_PORT, HEALTH_CHECK_PORT)
               .waitingFor(Wait.forHttp("/").forPort(HEALTH_CHECK_PORT))
               .withCopyFileToContainer(
                   MountableFile.forClasspathResource("/otel.yaml"), "/etc/otel.yaml")
@@ -90,17 +88,6 @@ public class ExporterBenchmark {
       return OtlpGrpcSpanExporter.builder()
           .setEndpoint("http://" + host + ":" + port)
           .setTimeout(Duration.ofSeconds(50))
-          .build();
-    }
-  }
-
-  public static class JaegerBenchmark extends AbstractProcessorBenchmark {
-    @Override
-    protected JaegerThriftSpanExporter createExporter(GenericContainer<?> collector) {
-      String host = collector.getHost();
-      int port = collector.getMappedPort(JAEGER_PORT);
-      return JaegerThriftSpanExporter.builder()
-          .setEndpoint("http://" + host + ":" + port + "/api/traces")
           .build();
     }
   }

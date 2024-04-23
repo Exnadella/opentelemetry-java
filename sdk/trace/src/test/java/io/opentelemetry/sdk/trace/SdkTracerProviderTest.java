@@ -5,6 +5,7 @@
 
 package io.opentelemetry.sdk.trace;
 
+import static io.opentelemetry.api.common.AttributeKey.stringKey;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -13,12 +14,12 @@ import static org.mockito.Mockito.when;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.internal.testing.slf4j.SuppressLogger;
 import io.opentelemetry.sdk.common.Clock;
 import io.opentelemetry.sdk.common.CompletableResultCode;
-import io.opentelemetry.sdk.common.InstrumentationLibraryInfo;
+import io.opentelemetry.sdk.common.InstrumentationScopeInfo;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
-import io.opentelemetry.semconv.resource.attributes.ResourceAttributes;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -81,7 +82,7 @@ class SdkTracerProviderTest {
   @Test
   void builder_serviceNameProvided() {
     Resource resource =
-        Resource.create(Attributes.of(ResourceAttributes.SERVICE_NAME, "mySpecialService"));
+        Resource.create(Attributes.of(stringKey("service.name"), "mySpecialService"));
 
     SdkTracerProvider tracerProvider =
         SdkTracerProvider.builder()
@@ -168,16 +169,19 @@ class SdkTracerProviderTest {
   }
 
   @Test
-  void propagatesInstrumentationLibraryInfoToTracer() {
-    InstrumentationLibraryInfo expected =
-        InstrumentationLibraryInfo.create("theName", "theVersion", "http://url");
+  void propagatesInstrumentationScopeInfoToTracer() {
+    InstrumentationScopeInfo expected =
+        InstrumentationScopeInfo.builder("theName")
+            .setVersion("theVersion")
+            .setSchemaUrl("http://url")
+            .build();
     Tracer tracer =
         tracerFactory
             .tracerBuilder(expected.getName())
             .setInstrumentationVersion(expected.getVersion())
             .setSchemaUrl(expected.getSchemaUrl())
             .build();
-    assertThat(((SdkTracer) tracer).getInstrumentationLibraryInfo()).isEqualTo(expected);
+    assertThat(((SdkTracer) tracer).getInstrumentationScopeInfo()).isEqualTo(expected);
   }
 
   @Test
@@ -208,6 +212,7 @@ class SdkTracerProviderTest {
   }
 
   @Test
+  @SuppressLogger(SdkTracerProvider.class)
   void shutdownTwice_OnlyFlushSpanProcessorOnce() {
     tracerFactory.shutdown();
     Mockito.verify(spanProcessor, Mockito.times(1)).shutdown();
@@ -226,22 +231,22 @@ class SdkTracerProviderTest {
   @Test
   void suppliesDefaultTracerForNullName() {
     SdkTracer tracer = (SdkTracer) tracerFactory.get(null);
-    assertThat(tracer.getInstrumentationLibraryInfo().getName())
+    assertThat(tracer.getInstrumentationScopeInfo().getName())
         .isEqualTo(SdkTracerProvider.DEFAULT_TRACER_NAME);
 
     tracer = (SdkTracer) tracerFactory.get(null, null);
-    assertThat(tracer.getInstrumentationLibraryInfo().getName())
+    assertThat(tracer.getInstrumentationScopeInfo().getName())
         .isEqualTo(SdkTracerProvider.DEFAULT_TRACER_NAME);
   }
 
   @Test
   void suppliesDefaultTracerForEmptyName() {
     SdkTracer tracer = (SdkTracer) tracerFactory.get("");
-    assertThat(tracer.getInstrumentationLibraryInfo().getName())
+    assertThat(tracer.getInstrumentationScopeInfo().getName())
         .isEqualTo(SdkTracerProvider.DEFAULT_TRACER_NAME);
 
     tracer = (SdkTracer) tracerFactory.get("", "");
-    assertThat(tracer.getInstrumentationLibraryInfo().getName())
+    assertThat(tracer.getInstrumentationScopeInfo().getName())
         .isEqualTo(SdkTracerProvider.DEFAULT_TRACER_NAME);
   }
 }

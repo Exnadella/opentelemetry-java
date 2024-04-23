@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * A {@link SpanExporter} implementation that can be used to test OpenTelemetry integration.
@@ -20,19 +22,18 @@ import java.util.List;
  *
  * <pre>{@code
  * // class MyClassTest {
- * //   private final Tracer tracer = new TracerSdk();
  * //   private final InMemorySpanExporter testExporter = InMemorySpanExporter.create();
- * //
- * //   @Before
- * //   public void setup() {
- * //     tracer.addSpanProcessor(SimpleSampledSpansProcessor.builder(testExporter).build());
- * //   }
+ * //   private final SdkTracerProvider tracerProvider = SdkTracerProvider
+ * //     .builder()
+ * //     .addSpanProcessor(SimpleSpanProcessor.create(testExporter))
+ * //     .build();
  * //
  * //   @Test
  * //   public void getFinishedSpanData() {
+ * //     Tracer tracer = tracerProvider.tracerBuilder("test-scope").build();
  * //     tracer.spanBuilder("span").startSpan().end();
  * //
- * //     List<Span> spanItems = exporter.getFinishedSpanItems();
+ * //     List<SpanData> spanItems = testExporter.getFinishedSpanItems();
  * //     assertThat(spanItems).isNotNull();
  * //     assertThat(spanItems.size()).isEqualTo(1);
  * //     assertThat(spanItems.get(0).getName()).isEqualTo("span");
@@ -41,7 +42,7 @@ import java.util.List;
  * }</pre>
  */
 public final class InMemorySpanExporter implements SpanExporter {
-  private final List<SpanData> finishedSpanItems = new ArrayList<>();
+  private final Queue<SpanData> finishedSpanItems = new ConcurrentLinkedQueue<>();
   private boolean isStopped = false;
 
   /**
@@ -59,9 +60,7 @@ public final class InMemorySpanExporter implements SpanExporter {
    * @return a {@code List} of the finished {@code Span}s.
    */
   public List<SpanData> getFinishedSpanItems() {
-    synchronized (this) {
-      return Collections.unmodifiableList(new ArrayList<>(finishedSpanItems));
-    }
+    return Collections.unmodifiableList(new ArrayList<>(finishedSpanItems));
   }
 
   /**
@@ -70,19 +69,15 @@ public final class InMemorySpanExporter implements SpanExporter {
    * <p>Does not reset the state of this exporter if already shutdown.
    */
   public void reset() {
-    synchronized (this) {
-      finishedSpanItems.clear();
-    }
+    finishedSpanItems.clear();
   }
 
   @Override
   public CompletableResultCode export(Collection<SpanData> spans) {
-    synchronized (this) {
-      if (isStopped) {
-        return CompletableResultCode.ofFailure();
-      }
-      finishedSpanItems.addAll(spans);
+    if (isStopped) {
+      return CompletableResultCode.ofFailure();
     }
+    finishedSpanItems.addAll(spans);
     return CompletableResultCode.ofSuccess();
   }
 
@@ -105,10 +100,8 @@ public final class InMemorySpanExporter implements SpanExporter {
    */
   @Override
   public CompletableResultCode shutdown() {
-    synchronized (this) {
-      finishedSpanItems.clear();
-      isStopped = true;
-    }
+    finishedSpanItems.clear();
+    isStopped = true;
     return CompletableResultCode.ofSuccess();
   }
 

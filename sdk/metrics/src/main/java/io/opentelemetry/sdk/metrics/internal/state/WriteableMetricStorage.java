@@ -7,6 +7,7 @@ package io.opentelemetry.sdk.metrics.internal.state;
 
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.context.Context;
+import io.opentelemetry.sdk.metrics.data.MetricData;
 
 /**
  * Stores {@link MetricData} and allows synchronous writes of measurements.
@@ -14,26 +15,11 @@ import io.opentelemetry.context.Context;
  * <p>This class is internal and is hence not for public use. Its APIs are unstable and can change
  * at any time.
  */
-public interface WriteableMetricStorage extends MetricStorage {
-  /** Bind an efficient storage handle for a set of attributes. */
-  BoundStorageHandle bind(Attributes attributes);
+public interface WriteableMetricStorage {
 
   /** Records a measurement. */
-  default void recordLong(long value, Attributes attributes, Context context) {
-    BoundStorageHandle handle = bind(attributes);
-    try {
-      handle.recordLong(value, attributes, context);
-    } finally {
-      handle.release();
-    }
-  }
+  void recordLong(long value, Attributes attributes, Context context);
+
   /** Records a measurement. */
-  default void recordDouble(double value, Attributes attributes, Context context) {
-    BoundStorageHandle handle = bind(attributes);
-    try {
-      handle.recordDouble(value, attributes, context);
-    } finally {
-      handle.release();
-    }
-  }
+  void recordDouble(double value, Attributes attributes, Context context);
 }
